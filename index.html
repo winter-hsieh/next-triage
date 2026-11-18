@@ -896,10 +896,11 @@ async function ask(q){
   p.log.push({who:"nurse",text:q}); p.turns++; play("#figN","talk");
   let r=null;
   if((aiState==="ai" && sample) || byokReady()){
-    S.busy=true; render(); showThinking(p);
+    S.busy=true; S.aiCtl=new AbortController(); render(); showThinking(p);
+    const slowT=setTimeout(()=>{ const n=document.querySelector("#chat .thinking"); if(n&&S.busy) n.lastChild.textContent="……（AI 比較慢，可以按「取消」改用離線回答）"; },6000);
     try{
       S.aiCalls++;
-      const j=await aiJSON(buildPrompt(p,q));
+      const j=await aiJSON(buildPrompt(p,q),S.aiCtl.signal);
       const allowed=new Set(p.c.clues.map(c=>c.id));
       r={patient:String(j.patient||"").slice(0,400), family:p.c.family?String(j.family||"").slice(0,400):"",
          revealed:(Array.isArray(j.revealed_clues)?j.revealed_clues:[]).map(String).filter(id=>allowed.has(id)),
@@ -913,9 +914,9 @@ async function ask(q){
       } else if(e&&e.code==="bad_key"){ byokBroken=true; flash("API key 無效，先改用離線模式（可到「AI 設定」更新）"); refreshAINote(); }
       else if(e&&e.code==="rate_limited"){ flash("AI 呼叫太頻繁或額度用完，這一回合改用離線腳本"); }
       if(e&&e.code!=="bad_key"&&!sample) flash("AI 沒有回應，這一句改用離線回答");
-      if(e&&!sample) p.log.push({who:"sys",text:`⚠ AI 沒有回應（${errText(e)}），這一句改用離線回答`});
+      if(e&&!["not_granted","sampling_disabled","not_declared","capability_disabled","capability_removed"].includes(e.code)) p.log.push({who:"sys",text: e.code==="cancelled"? "已取消 AI 回答，這一句改用離線回答" : `⚠ AI 沒有回應（${errText(e)}），這一句改用離線回答`});
       r=null;
-    }finally{ S.busy=false; lastReal=performance.now(); }
+    }finally{ clearTimeout(slowT); S.busy=false; S.aiCtl=null; lastReal=performance.now(); }
   }
   if(!r) r=offlineReply(p,q);
   for(const id of r.revealed){ p.revealed.add(id); p.log.at(-1).hit=true; }
@@ -1029,35 +1030,49 @@ function errText(e){
   const c=e&&e.code;
   if(c==="bad_key") return "API key 無效或沒有權限";
   if(c==="rate_limited") return "超過每分鐘或每天的免費次數，稍後再試";
+  if(c==="timeout") return "AI 回應太慢，等太久了";
+  if(c==="cancelled") return "你按了取消";
   if(c==="busy") return "AI 服務目前太多人使用（伺服器忙碌），已自動重試仍失敗，請稍後再試";
   if(c==="bad_request") return "請求有誤（模型名稱可能不對）："+(e.message||"");
   if(c==="refused") return "模型拒絕回答這一題";
   return (e&&e.message)||"連線失敗，請確認網路";
 }
-/* 伺服器忙碌（5xx）自動重試兩次；每分鐘次數用完（429）等 5 秒再試一次 */
-async function byokCall(prompt,cfg){
-  const waits=[1200,3000];
-  for(let i=0;;i++){
-    try{ return await byokCallOnce(prompt,cfg); }
-    catch(e){
-      const busy=e&&e.code==="busy", rl=e&&e.code==="rate_limited";
-      if(busy && i<waits.length){ await new Promise(r=>setTimeout(r,waits[i])); continue; }
-      if(rl && i===0){ await new Promise(r=>setTimeout(r,5000)); continue; }
-      // 預設型號一直忙碌：改用比較不擠的 gemini-3.5-flash-lite 再試一次（玩家自己填了型號就不換）
-      const c0=cfg||byok;
-      if((busy||rl) && c0.provider==="gemini" && !c0.model && !c0._lite){
-        try{ return await byokCallOnce(prompt,{...c0,model:"gemini-3.5-flash-lite",_lite:true}); }catch(_){}
-      }
-      throw e;
+/* 每次呼叫最多等 25 秒；伺服器忙碌自動重試；預設型號一直不行就改用 lite；玩家可以按「取消」 */
+const AI_TIMEOUT=25000;
+function sleep(ms,signal){ return new Promise((res,rej)=>{ const t=setTimeout(res,ms);
+  if(signal) signal.addEventListener("abort",()=>{ clearTimeout(t); rej({code:"cancelled"}); },{once:true}); }); }
+async function onceWithTimeout(prompt,cfg,outer,ms){
+  if(outer&&outer.aborted) throw {code:"cancelled"};
+  const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(),ms||AI_TIMEOUT), onAbort=()=>ctl.abort();
+  if(outer) outer.addEventListener("abort",onAbort,{once:true});
+  try{ return await byokCallOnce(prompt,{...cfg,_signal:ctl.signal}); }
+  catch(e){ if(ctl.signal.aborted) throw {code: outer&&outer.aborted? "cancelled" : "timeout"}; throw e; }
+  finally{ clearTimeout(t); if(outer) outer.removeEventListener("abort",onAbort); }
+}
+async function byokCall(prompt,cfg,outer){
+  cfg=cfg||byok; const waits=[1200,3000]; let lastErr=null;
+  for(let i=0;i<=waits.length;i++){
+    try{ return await onceWithTimeout(prompt,cfg,outer); }
+    catch(e){ lastErr=e;
+      if(e.code==="cancelled") throw e;
+      if(e.code==="busy" && i<waits.length){ await sleep(waits[i],outer); continue; }
+      if(e.code==="rate_limited" && i===0){ await sleep(5000,outer); continue; }
+      break;
     }
   }
+  const c=lastErr&&lastErr.code;
+  if((c==="busy"||c==="rate_limited"||c==="timeout") && cfg.provider==="gemini" && !cfg.model){
+    try{ return await onceWithTimeout(prompt,{...cfg,model:"gemini-3.5-flash-lite"},outer,20000); }
+    catch(e){ if(e.code==="cancelled") throw e; }
+  }
+  throw lastErr;
 }
 async function byokCallOnce(prompt,cfg){
   cfg=cfg||byok;
   if(cfg.provider==="gemini"){
     const model=cfg.model||PROVIDERS.gemini.model;
     const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.key)}`,{
-      method:"POST",headers:{"Content-Type":"application/json"},
+      method:"POST",signal:cfg._signal,headers:{"Content-Type":"application/json"},
       body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json"}})});
     const j=await r.json().catch(()=>({}));
     if(!r.ok){
@@ -1066,7 +1081,7 @@ async function byokCallOnce(prompt,cfg){
       const sug=msg.match(/use models\/([\w.\-]+)/i);
       if(sug && !cfg._retried && /no longer available|not found|deprecated/i.test(msg)){
         PROVIDERS.gemini.model=sug[1];
-        if(cfg===byok && byok.model){ byok.model=""; try{ localStorage.setItem(BYOK_STORE,JSON.stringify(byok)); }catch(_){} }
+        if(byok && byok.model && byok.model===cfg.model){ byok.model=""; try{ localStorage.setItem(BYOK_STORE,JSON.stringify(byok)); }catch(_){} }
         return byokCallOnce(prompt,{...cfg,model:sug[1],_retried:true});
       }
       throw httpErr(r.status, msg);
@@ -1078,7 +1093,7 @@ async function byokCallOnce(prompt,cfg){
   }
   /* Claude Messages API：瀏覽器直連需要 anthropic-dangerous-direct-browser-access；
      預設 Claude Opus 5.5（effort low 讓回答快一點），並開啟伺服器端的拒答備援 */
-  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",signal:cfg._signal,headers:{
       "content-type":"application/json","x-api-key":cfg.key,"anthropic-version":"2026-10-21",
       "anthropic-beta":"server-side-fallback-2026-07-01","anthropic-dangerous-direct-browser-access":"true"},
     body:JSON.stringify({model:cfg.model||PROVIDERS.claude.model,max_tokens:16000,output_config:{effort:"low"},fallbacks:"default",
@@ -1090,9 +1105,15 @@ async function byokCallOnce(prompt,cfg){
   if(!t) throw {code:"empty_completion",message:"沒有回應"};
   return t;
 }
-async function aiJSON(prompt){
-  if(sample) return await sample.json(prompt,{modelTier:"quick",cache:false});
-  return parseLooseJSON(await byokCall(prompt));
+async function aiJSON(prompt,outer){
+  if(sample){
+    const ctl=new AbortController(), t=setTimeout(()=>ctl.abort(),40000), on=()=>ctl.abort();
+    if(outer) outer.addEventListener("abort",on,{once:true});
+    try{ return await sample.json(prompt,{modelTier:"quick",cache:false,signal:ctl.signal}); }
+    catch(e){ if(e&&e.code==="cancelled"&&!(outer&&outer.aborted)) throw {code:"timeout"}; throw e; }
+    finally{ clearTimeout(t); if(outer) outer.removeEventListener("abort",on); }
+  }
+  return parseLooseJSON(await byokCall(prompt,null,outer));
 }
 function aiNoteText(){
   if(aiState==="ai") return "病人與家屬由 Claude 即時扮演，第一次問診時會請你允許使用 Claude。";
@@ -1360,8 +1381,10 @@ function render(){
   $("formWho").textContent=p? p.c.name : "—";
   $("submitBtn").disabled=!on||!S.selLevel||S.busy;
   $("dest").replaceChildren(...(S.selLevel&&on? ["送往 ",el("b",{text:DEST[S.selLevel][0]}),"：",DEST[S.selLevel][1]] : ["選好級數後，會依級數送往對應區域。"]));
-  for(const id of ["askBtn","vitalBtn","lookBtn","askInput"]) $(id).disabled=!on||S.busy;
-  $("askBtn").firstChild.textContent=S.busy?"…":"問";
+  for(const id of ["vitalBtn","lookBtn","askInput"]) $(id).disabled=!on||S.busy;
+  $("askBtn").disabled=!on;
+  $("askBtn").firstChild.textContent=S.busy?"取消":"問";
+  $("askBtn").querySelector(".cost").hidden=!!S.busy;
   if(on){
     $("ptHead").replaceChildren(
       el("h2",{},`${p.c.name}`,el("small",{text:`${p.c.age} 歲・${p.c.sex}${p.c.job?"・"+p.c.job:""}・${p.c.mode}${p.c.family?"・陪同："+p.c.family.who:""}`}),el("small",{class:"mono",text:"到診 "+clockStr(arriveSec(p))})),
@@ -1904,7 +1927,7 @@ const c_label=k=>INT[k].label;
 function bargeIn(p){ interrupt(p,"barge"); }
 
 /* ============ 啟動 ============ */
-$("askForm").addEventListener("submit",e=>{e.preventDefault(); const v=$("askInput").value; $("askInput").value=""; ask(v);});
+$("askForm").addEventListener("submit",e=>{e.preventDefault(); if(S&&S.busy){ if(S.aiCtl) S.aiCtl.abort(); return; } const v=$("askInput").value; $("askInput").value=""; ask(v);});
 $("vitalBtn").addEventListener("click",takeVitals);
 $("lookBtn").addEventListener("click",look);
 $("triageForm").addEventListener("submit",submitTriage);
