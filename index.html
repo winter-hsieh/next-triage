@@ -1174,7 +1174,7 @@ function showAISettings(){
     return el("div",{class:"popcard"},el("h3",{text:"AI 設定"}),
       el("p",{text:"填入你自己的 API key，病人就會由 AI 即時扮演，費用或額度算在你自己的帳號。不填也能玩（離線模式）。"}),
       el("label",{class:"aif"},"服務",prov), hint, howRow, guide, el("label",{class:"aif"},"API key",key), el("label",{class:"aif"},"模型（選填）",model),
-      el("p",{class:"note",text:"key 只存在這台裝置的瀏覽器裡，遊戲直接連到 Google 或 Anthropic，不會傳給作者。在公用電腦玩完請按「清除 key」。"}),
+      el("p",{class:"note",text:"key 只存在這台裝置的瀏覽器裡，遊戲直接連到 Google 或 Anthropic，不會傳給作者。在公用電腦玩完請按「清除 key」。Gemini 免費版的對話內容可能被 Google 用來改進服務，問診時請不要打自己的真實個資。"}),
       el("div",{class:"btnrow"},test,save,clear,el("button",{class:"btn ghost",type:"button",onclick:close},"關閉")), res);
   });
 }
@@ -1182,7 +1182,7 @@ function showAISettings(){
 function feedbackBlock(sc,ttl){
   const ok=/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(FEEDBACK_URL);
   const inClaude=!!window.claude;
-  const ta=el("textarea",{id:"fbText",rows:"4",maxlength:"1000",placeholder:"好玩嗎？哪裡卡住、哪裡看不懂、想加什麼？都可以寫。"});
+  const ta=el("textarea",{id:"fbText",rows:"4",maxlength:"1000",placeholder:"好玩嗎？哪裡卡住、哪裡看不懂、想加什麼？都可以寫。（請不要寫電話、學號等個人資料）"});
   const nick=el("input",{id:"fbNick",maxlength:"40",placeholder:"暱稱（選填）"});
   const msg=el("p",{class:"note",text: ok? "按下送出就會存到作者那邊。" : "回饋功能還沒設定好，之後就能使用。"});
   const data=()=>({text:ta.value.trim(),nick:nick.value.trim(),grade:sc.grade,score:`${sc.total}/${sc.max}`,title:ttl[0],src:inClaude?"claude.ai":(location.host||"HTML 檔")});
@@ -1201,6 +1201,7 @@ function feedbackBlock(sc,ttl){
         const res=await fetch(FEEDBACK_URL,{method:"POST",body:new URLSearchParams(data())});
         const txt=(await res.text()).trim();
         if(res.ok && txt==="ok") lock("已送出，謝謝你！");
+        else if(txt==="busy") fail("現在送出的人太多，請過一分鐘再按一次。");
         else if(/accounts\.google|ServiceLogin|登入|sign in/i.test(txt)) fail("送出失敗：回饋表單需要登入，請告訴作者把部署權限改成「所有人」。");
         else fail("送出失敗：回饋表單回應異常，請稍後再試，或直接告訴作者。");
       }catch(_){ fail("送出失敗：連不到回饋表單。請確認網路後再試；如果一直失敗，請告訴作者。"); }
