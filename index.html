@@ -977,7 +977,7 @@ function endShift(){
 }
 const PTS={"0":100,"-1":70,"-2":40,"1":20,"2":0};
 function scoreOf(){
-  let total=0, collapses=0; const arrived=S.pts.filter(p=>p.arrived), max=arrived.length*100;
+  let total=0, collapses=0, faultCollapses=0; const arrived=S.pts.filter(p=>p.arrived), max=arrived.length*100;
   for(const p of arrived){
     const tl=p.c.trueLevel;
     const playerLv = p.triage && !p.triage.forced ? (p.triage.forcedFrom ?? p.triage.level) : null;
@@ -988,14 +988,16 @@ function scoreOf(){
     const end = p.collapsed? p.collapsedAt : (p.seenAt!=null? p.seenAt : S.t);
     p.waitMin=(end-arriveSec(p))/60;
     if(p.waitMin>ALLOWED[tl]+3) p.items.push(["超過建議看診時間",-10]);
-    if(p.collapsed){ collapses++; p.items.push(["倒下",-50]); }
+    if(p.collapsed){ collapses++; p.items.push(["倒下",-50]);
+      // 判斷造成的倒下：還沒檢傷就倒下，或你給的級數比真實輕
+      p.faultCollapse = playerLv==null || playerLv>tl; if(p.faultCollapse) faultCollapses++; }
     p.pts=p.items.reduce((a,x)=>a+x[1],0); total+=p.pts;
   }
   const pct=max? total/max : 0;
   let gi = pct>=0.9?0: pct>=0.75?1: pct>=0.55?2: pct>=0.35?3:4;
-  if(collapses) gi=Math.min(4,gi+1);
+  if(faultCollapses) gi=Math.min(4,gi+1);
   const fam=arrived.filter(p=>p.c.family && p.called);
-  return {total,max,grade:"SABCD"[gi],collapses,famAvg:fam.length?Math.round(fam.reduce((a,p)=>a+p.anx,0)/fam.length):null};
+  return {total,max,grade:"SABCD"[gi],collapses,faultCollapses,famAvg:fam.length?Math.round(fam.reduce((a,p)=>a+p.anx,0)/fam.length):null};
 }
 function fmtD(x){ if(Math.abs(x)<0.05) return "平均誤差 0"; return (x>0?"平均低估 ":"平均高估 ")+Math.abs(x).toFixed(1)+" 級"; }
 function biasSlices(){
@@ -1285,10 +1287,11 @@ function showResults(){
   showOverlay(el("div",{class:"sheet",role:"dialog","aria-modal":"true","aria-label":"交班報告"},
     el("div",{class:"grade"},el("div",{class:"g",text:sc.grade}),
       el("div",{},el("div",{class:"note",text:"班次評等"}),el("div",{class:"total"+(sc.total<0?" neg":""),text:`${sc.total} / ${sc.max} 分`}),
-        el("div",{class:"note",text:`倒下 ${sc.collapses} 人${sc.collapses?"（評等降一級）":""}${sc.famAvg!=null?"｜家屬平均焦慮 "+sc.famAvg+"/100":""}${S.aiCalls?"｜本局病人 AI 回應 "+S.aiCalls+" 次":""}`}))),
+        el("div",{class:"note",text:`倒下 ${sc.collapses} 人${sc.faultCollapses?`（其中 ${sc.faultCollapses} 人是判太輕或還沒檢傷，評等降一級）`:sc.collapses?"（你的判斷沒有錯，評等不降級）":""}${sc.famAvg!=null?"｜家屬平均焦慮 "+sc.famAvg+"/100":""}${S.aiCalls?"｜本局病人 AI 回應 "+S.aiCalls+" 次":""}`}))),
     el("div",{class:"rule"},el("b",{text:"怎麼算分"}),
       el("div",{class:"legend"},["分對 ",el("b",{text:"100"})],["高估一級 ",el("b",{text:"70"})],["高估兩級 ",el("b",{text:"40"})],["低估一級 ",el("b",{class:"neg",text:"20"})],["低估兩級以上 ",el("b",{class:"neg",text:"0"})]),
-      el("p",{text:"每位病人最多 100 分。超過該級建議的看診時間 −10（這不全是你的錯：問太久、床位不夠、同時來太多重症都會造成），病人倒下 −50；只要有人倒下，評等降一級。低估比高估扣得多，因為把重症判輕的代價是有人在候診區倒下。"})),
+      el("p",{text:"每位病人最多 100 分。超過該級建議的看診時間 −10（這不全是你的錯：問太久、床位不夠、同時來太多重症都會造成），病人倒下 −50。低估比高估扣得多，因為把重症判輕的代價是有人在候診區倒下。"}),
+      el("p",{text:"評等看總分比例：S 90% 以上、A 75% 以上、B 55% 以上、C 35% 以上，其他是 D。如果有病人因為你判太輕、或還沒輪到檢傷就倒下，評等再降一級；你判對了、只是等床或等醫師時倒下的，不降級。"})),
     el("h3",{text:"你的稱號"}),
     el("div",{class:"verdict"},el("div",{class:"vt",text:"「"+ttl[0]+"」"}),el("div",{class:"vd",text:ttl[1]}),el("div",{class:"note",text:verdict(dims)})),
     el("h3",{text:"偏誤切片"}),
