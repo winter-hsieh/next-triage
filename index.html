@@ -1150,8 +1150,15 @@ function feedbackBlock(sc,ttl){
     btn=el("button",{class:"btn",type:"button",disabled:true},"送出回饋");
     btn.addEventListener("click",async()=>{
       if(sent||!ok||!ta.value.trim()) return; btn.disabled=true; btn.textContent="送出中…";
-      try{ await fetch(FEEDBACK_URL,{method:"POST",mode:"no-cors",body:new URLSearchParams(data())}); lock("已送出，謝謝你！"); }
-      catch(_){ btn.disabled=false; btn.textContent="送出回饋"; msg.textContent="送出失敗，請確認有連上網路再試一次。"; }
+      const fail=t=>{ btn.disabled=false; btn.textContent="再送一次"; msg.textContent=t; };
+      try{
+        // 一般請求（不是 no-cors）才讀得到 Apps Script 的回應，能確認是否真的存進試算表
+        const res=await fetch(FEEDBACK_URL,{method:"POST",body:new URLSearchParams(data())});
+        const txt=(await res.text()).trim();
+        if(res.ok && txt==="ok") lock("已送出，謝謝你！");
+        else if(/accounts\.google|ServiceLogin|登入|sign in/i.test(txt)) fail("送出失敗：回饋表單需要登入，請告訴作者把部署權限改成「所有人」。");
+        else fail("送出失敗：回饋表單回應異常，請稍後再試，或直接告訴作者。");
+      }catch(_){ fail("送出失敗：連不到回饋表單。請確認網路後再試；如果一直失敗，請告訴作者。"); }
     });
   }
   const upd=()=>{ if(sent) return; const can=ok&&!!ta.value.trim();
