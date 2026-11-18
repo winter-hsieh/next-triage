@@ -92,6 +92,9 @@ button{cursor:pointer}
 .msg.thinking{color:var(--muted);font-style:italic}
 .quick{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;padding:8px 14px 2px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent)}
 .quick::-webkit-scrollbar{display:none}
+.quick{cursor:grab;user-select:none}
+.quick.dragging{cursor:grabbing}
+.quick.dragging button{pointer-events:none}
 .quick.atend{-webkit-mask-image:none;mask-image:none}
 *{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
 ::-webkit-scrollbar{width:8px;height:8px}
@@ -1399,7 +1402,13 @@ function render(){
 const QUICK=["還有哪裡不舒服嗎？","是突然開始，還是慢慢變嚴重？","有什麼疾病史？平常有在吃藥嗎？","有沒有冒冷汗、頭暈或喘？","痛起來是什麼感覺？會跑到別的地方嗎？","平常的狀況跟今天比起來呢？"];
 (()=>{ const q=$("quick"); const upd=()=>q.classList.toggle("atend",q.scrollLeft+q.clientWidth>=q.scrollWidth-4);
   q.addEventListener("wheel",e=>{ if(Math.abs(e.deltaY)>Math.abs(e.deltaX)&&q.scrollWidth>q.clientWidth){ e.preventDefault(); q.scrollLeft+=e.deltaY; } },{passive:false});
-  q.addEventListener("scroll",upd); try{ new ResizeObserver(upd).observe(q); }catch(_){} })();
+  q.addEventListener("scroll",upd); try{ new ResizeObserver(upd).observe(q); }catch(_){}
+  /* 用滑鼠按住左右拖拉（觸控本來就能滑） */
+  let down=null, dragged=false;
+  q.addEventListener("pointerdown",e=>{ if(e.pointerType!=="mouse"||e.button!==0) return; down={x:e.clientX,left:q.scrollLeft}; dragged=false; });
+  window.addEventListener("pointermove",e=>{ if(!down) return; const dx=e.clientX-down.x; if(Math.abs(dx)>5){ dragged=true; q.classList.add("dragging"); } if(dragged) q.scrollLeft=down.left-dx; });
+  window.addEventListener("pointerup",()=>{ down=null; q.classList.remove("dragging"); });
+  q.addEventListener("click",e=>{ if(dragged){ e.preventDefault(); e.stopPropagation(); dragged=false; } },true); })();
 function buildQuick(){ $("quick").replaceChildren(...QUICK.map(q=>el("button",{type:"button",onclick:()=>ask(q)},q))); }
 
 function showTitle(){
