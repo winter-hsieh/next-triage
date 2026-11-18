@@ -1,0 +1,1770 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="下一位：Triage — 急診檢傷模擬遊戲（Emergency Department Triage Simulator）">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font-size:14px}img{max-width:100%}[hidden]{display:none!important}</style>
+</head>
+<body>
+<title>下一位：Triage</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Noto+Sans+TC:wght@400;500;700;900&display=swap">
+<style>
+/* Layout: 單螢幕三欄檢傷台（候診佇列｜問診｜檢傷單），上方常駐班次狀態列；窄螢幕改成直向堆疊。
+   刻意只做深色：醫療資訊系統感，讓計時器與顏色變化是最顯眼的元素。 */
+:root{
+  color-scheme: dark;
+  --bg:#0c131a; --panel:#121c26; --panel2:#182532; --line:#24364a; --line2:#2f455c;
+  --fg:#e5edf4; --muted:#8aa0b3; --dim:#5d7387;
+  --accent:#5ec4d4; --accent-ink:#06222a;
+  --warn:#f0c24f; --orange:#f08b3d; --crit:#ef5252; --ok:#5cc98c;
+  --t1:#3f7ee3; --t2:#e14a4a; --t3:#e7c43f; --t4:#4fb874; --t5:#e8edf1;
+  --sans:"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Menlo,monospace;
+  --r:6px;
+  --fig-p:#5f7a96; --fig-n:#3f9aa8; --fig-f:#8a7560; --fig-i:#b0524f; --desk:#1e2c3a;
+  --head:#d6c0a9; --head-pale:#e6e0da; --head-grey:#b9c4ca;
+}
+html,body{height:100%}
+[hidden]{display:none!important}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14px;line-height:1.55;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:0}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.app{position:relative;z-index:1;display:flex;flex-direction:column;height:100%;min-height:560px;padding-block:12px;gap:10px;pointer-events:none}
+.app>*{pointer-events:auto}
+
+/* 狀態列 */
+.bar{display:flex;flex-wrap:nowrap;overflow-x:auto;white-space:nowrap;align-items:center;gap:8px 18px;background:color-mix(in srgb,var(--panel) 90%,transparent);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:var(--r);padding:8px 14px}
+.brand{font-weight:900;font-size:18px;letter-spacing:.04em;display:flex;align-items:baseline;gap:8px}
+.brand small{font-weight:500;font-size:11px;color:var(--muted);letter-spacing:.12em}
+.stat{display:flex;flex-direction:column;line-height:1.15}
+.stat b{font-family:var(--mono);font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.stat>span{font-size:10.5px;color:var(--muted);letter-spacing:.12em}
+.clock b{color:var(--accent);font-size:24px}
+.bar .grow{flex:1}
+.pill{font-size:11px;padding:3px 8px;border-radius:99px;border:1px solid var(--line2);color:var(--muted);white-space:nowrap}
+.pill.ai{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 50%,transparent)}
+.ctl{background:var(--panel2);border:1px solid var(--line2);border-radius:var(--r);padding:5px 10px;font-size:12.5px}
+.ctl:hover{border-color:var(--accent)}
+.ctl[aria-pressed="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+
+/* 三欄 */
+.desk{flex:none;margin-top:auto;height:clamp(330px,50vh,640px);min-height:0;display:grid;grid-template-columns:minmax(230px,280px) minmax(0,1fr) minmax(260px,320px);gap:10px}
+.col{background:color-mix(in srgb,var(--panel) 91%,transparent);backdrop-filter:blur(8px);border:1px solid var(--line);border-radius:var(--r);display:flex;flex-direction:column;min-height:0;min-width:0}
+.colhead{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);font-size:11.5px;letter-spacing:.14em;color:var(--muted)}
+.scroll{overflow-y:auto;min-height:0}
+
+/* 佇列卡 */
+.queue{flex:1;padding:8px;display:flex;flex-direction:column;gap:8px}
+.card{text-align:left;background:var(--panel2);border:1px solid var(--line2);border-left:5px solid var(--dim);border-radius:var(--r);padding:8px 10px;display:grid;grid-template-columns:1fr auto;gap:2px 8px;width:100%}
+.card:hover{border-color:var(--accent);border-left-color:inherit}
+.card.s1{border-left-color:var(--warn)} .card.s2{border-left-color:var(--orange)} .card.s3{border-left-color:var(--crit);animation:pulse 1.2s infinite}
+.card.active{outline:2px solid var(--accent)}
+.card .who{font-weight:700}
+.card .cc{grid-column:1/-1;color:var(--muted);font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.card .wait{font-family:var(--mono);font-size:13px;color:var(--fg)}
+.card.s2 .wait,.card.s3 .wait{color:var(--crit)}
+@keyframes pulse{50%{box-shadow:0 0 0 3px color-mix(in srgb,var(--crit) 35%,transparent)}}
+@media (prefers-reduced-motion:reduce){.card.s3{animation:none}}
+.done{border-top:1px solid var(--line);padding:8px;display:flex;flex-direction:column;gap:6px;max-height:38%}
+.doneitem{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--muted)}
+.chip{font-family:var(--mono);font-size:11.5px;font-weight:600;padding:1px 7px;border-radius:4px;color:#111}
+.c1{background:var(--t1);color:#fff}.c2{background:var(--t2);color:#fff}.c3{background:var(--t3)}.c4{background:var(--t4)}.c5{background:var(--t5)}
+.empty{color:var(--dim);font-size:12.5px;padding:10px;text-align:center}
+
+/* 問診區 */
+.pthead{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:4px}
+.pthead h2{margin:0;font-size:17px;display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.pthead h2 small{font-size:12.5px;color:var(--muted);font-weight:400}
+.look{font-size:12.5px;color:var(--warn)}
+.chat{flex:1;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:85%;padding:8px 11px;border-radius:10px;white-space:pre-wrap;word-break:break-word}
+.msg .from{display:block;font-size:10.5px;letter-spacing:.1em;color:var(--muted);margin-bottom:2px}
+.msg.nurse{align-self:flex-end;background:color-mix(in srgb,var(--accent) 18%,var(--panel2));border:1px solid color-mix(in srgb,var(--accent) 40%,transparent)}
+.msg.patient{align-self:flex-start;background:var(--panel2);border:1px solid var(--line2)}
+.msg.family{align-self:flex-start;background:color-mix(in srgb,var(--orange) 10%,var(--panel2));border:1px dashed color-mix(in srgb,var(--orange) 55%,transparent);margin-left:22px}
+.msg.sys{align-self:center;background:none;color:var(--muted);font-size:12px;font-family:var(--mono);text-align:center;padding:2px 8px}
+.msg.thinking{color:var(--muted);font-style:italic}
+.quick{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;padding:8px 14px 2px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent)}
+.quick::-webkit-scrollbar{display:none}
+.quick.atend{-webkit-mask-image:none;mask-image:none}
+*{scrollbar-width:thin;scrollbar-color:var(--line2) transparent}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--line2);border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:var(--dim)}
+.quick button{flex:none}
+.quick button{background:none;border:1px solid var(--line2);border-radius:99px;padding:3px 10px;font-size:12.5px;color:var(--muted)}
+.quick button:hover{color:var(--fg);border-color:var(--accent)}
+.ask{display:flex;gap:8px;padding:10px 14px;flex-wrap:wrap}
+.ask input{flex:1;min-width:160px;background:var(--bg);border:1px solid var(--line2);border-radius:var(--r);padding:9px 11px}
+.btn{background:var(--accent);color:var(--accent-ink);border:none;border-radius:var(--r);padding:9px 16px;font-weight:700}
+.btn:disabled{opacity:.4;cursor:not-allowed}
+.btn.ghost{background:var(--panel2);color:var(--fg);border:1px solid var(--line2);font-weight:500}
+.btn .cost{font-family:var(--mono);font-size:11px;opacity:.75;margin-left:4px}
+.idle{flex:1;display:flex;flex-direction:column;justify-content:center;align-items:center;gap:6px;color:var(--muted);text-align:center;padding:24px}
+.idle .big{font-size:40px;font-weight:900;color:var(--line2);letter-spacing:.1em}
+
+/* 檢傷單 */
+.form{padding:12px;display:flex;flex-direction:column;gap:14px}
+.field{display:flex;flex-direction:column;gap:6px}
+.field>label,.field>.lbl{font-size:11px;letter-spacing:.14em;color:var(--muted)}
+.vitals{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+.vital{background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:5px 7px}
+.vital span{display:block;font-size:10px;color:var(--muted);letter-spacing:.08em}
+.vital b{font-family:var(--mono);font-size:15px;font-weight:600}
+.vital b.abn{color:var(--crit)}
+select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--r);padding:8px}
+.levels{display:grid;grid-template-columns:repeat(5,1fr);gap:5px}
+.lv{border:2px solid var(--line2);background:var(--bg);border-radius:var(--r);padding:6px 2px;display:flex;flex-direction:column;align-items:center;gap:1px}
+.lv b{font-family:var(--mono);font-size:18px}
+.lv span{font-size:10.5px;color:var(--muted)}
+.lv[aria-checked="true"]{border-color:currentColor;background:color-mix(in srgb,currentColor 16%,var(--bg))}
+.lv.l1{color:var(--t1)}.lv.l2{color:var(--t2)}.lv.l3{color:var(--t3)}.lv.l4{color:var(--t4)}.lv.l5{color:var(--t5)}
+.note{font-size:11.5px;color:var(--dim)}
+.toast{font-size:12.5px;color:var(--ok);min-height:1.2em}
+.term{background:none;border:none;padding:0;font:inherit;color:inherit;letter-spacing:inherit;border-bottom:1px dotted currentColor;cursor:help}
+.term:hover{color:var(--accent)}
+.pop{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--bg) 72%,transparent);padding:16px max(16px,env(safe-area-inset-right,0px)) 16px max(16px,env(safe-area-inset-left,0px))}
+.popcard{background:var(--panel2);border:1px solid var(--accent);border-radius:10px;max-width:460px;width:100%;padding:18px 20px;display:flex;flex-direction:column;gap:10px;max-height:85vh;overflow-y:auto}
+.popcard.alarm{border-color:var(--crit)}
+.popcard h3{margin:0;font-size:16px}
+.popcard p{margin:0;line-height:1.75}
+.popcard .note{color:var(--muted)}
+.glist{display:flex;flex-wrap:wrap;gap:6px}
+.glist button{background:var(--bg);border:1px solid var(--line2);border-radius:99px;padding:4px 11px;font-size:13px}
+.glist button:hover{border-color:var(--accent)}
+.choices{display:flex;flex-direction:column;gap:8px}
+.choices button{text-align:left;line-height:1.5}
+.dest{font-size:13px;color:var(--muted);background:var(--bg);border:1px solid var(--line);border-radius:var(--r);padding:8px 10px}
+.dest b{color:var(--fg)}
+.know{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px}
+.know .rule p{color:var(--fg)}
+.links{display:flex;flex-direction:column;gap:5px;font-size:13.5px}
+.links a{color:var(--accent)}
+.fb{display:flex;flex-direction:column;gap:8px}
+.fb textarea,.fb input{width:100%;background:var(--bg);border:1px solid var(--line2);border-radius:var(--r);padding:8px 10px;resize:vertical}
+a.btn{display:inline-block;text-decoration:none}
+a.btn[aria-disabled]{opacity:.4;cursor:not-allowed}
+button.btn:disabled{opacity:.4}
+.aif{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
+.aif input,.aif select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--r);padding:8px;color:var(--fg);font-size:14px}
+.popcard a{color:var(--accent)}
+.btnrow{display:flex;flex-wrap:wrap;gap:8px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px}
+.legend b{font-family:var(--mono)}
+
+/* 覆蓋層 */
+.overlay{position:fixed;inset:0;background:color-mix(in srgb,var(--bg) 45%,transparent);backdrop-filter:blur(2px);display:flex;justify-content:center;align-items:flex-start;overflow-y:auto;z-index:20;
+  padding:max(24px,env(safe-area-inset-top,0px)) max(16px,env(safe-area-inset-right,0px)) 24px max(16px,env(safe-area-inset-left,0px))}
+.sheet{background:var(--panel);border:1px solid var(--line2);border-radius:10px;max-width:860px;width:100%;padding:26px 28px;display:flex;flex-direction:column;gap:16px;margin:auto 0}
+.sheet h1{margin:0;font-size:44px;font-weight:900;letter-spacing:.06em;line-height:1.1}
+.sheet h1 .ecg{color:var(--accent)}
+.sheet .subt{margin-top:6px;font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+.sheet h3{margin:0;font-size:15px;letter-spacing:.06em}
+.sheet p{margin:0;color:var(--muted);text-wrap:pretty}
+.sheet .lead{color:var(--fg);font-size:16px}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px}
+.rule{border:1px solid var(--line);border-radius:var(--r);padding:10px 12px;background:var(--panel2)}
+.rule b{display:block;margin-bottom:3px}
+.rule p{font-size:13px}
+.ttasrow{display:flex;flex-wrap:wrap;gap:6px;font-size:12.5px}
+.disc{font-size:12px;color:var(--dim);border-top:1px solid var(--line);padding-top:10px}
+.sheet p.disc{max-width:none}
+.verdict{display:flex;flex-direction:column;gap:4px}
+.verdict .vt{font-size:26px;font-weight:900;color:var(--accent);letter-spacing:.04em}
+.verdict .vd{font-size:15px;font-weight:500}
+.verdict .note{font-weight:400}
+.alarm{border-color:var(--crit);box-shadow:0 0 0 4px color-mix(in srgb,var(--crit) 25%,transparent)}
+.alarm h1{color:var(--crit);font-size:34px}
+.tbl{overflow-x:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-size:11px;letter-spacing:.1em;color:var(--muted);font-weight:500}
+td.num{font-family:var(--mono);text-align:right;font-variant-numeric:tabular-nums}
+.grade{display:flex;align-items:center;gap:20px;flex-wrap:wrap}
+.grade .g{font-family:var(--mono);font-size:72px;font-weight:600;line-height:1;color:var(--accent)}
+.grade .total{font-family:var(--mono);font-size:28px}
+.neg{color:var(--crit)} .pos{color:var(--ok)}
+details{border:1px solid var(--line);border-radius:var(--r);background:var(--panel2);padding:8px 12px}
+details summary{cursor:pointer;font-weight:500}
+details .tr{margin-top:8px;display:flex;flex-direction:column;gap:4px;font-size:13px}
+.tr .turn{color:var(--muted)} .tr .turn.hit{color:var(--warn)}
+.verdict{font-size:18px;font-weight:700;border-left:4px solid var(--accent);padding:6px 12px;background:var(--panel2)}
+.bias{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px}
+.bias .grp{border:1px solid var(--line);border-radius:var(--r);padding:8px 10px}
+.bias .grp b{display:block;font-size:12px;color:var(--muted);letter-spacing:.08em;margin-bottom:4px}
+.bias .row{display:flex;justify-content:space-between;font-size:13px}
+
+/* 3D 場景 */
+.scene{position:fixed;inset:0;z-index:0;overflow:hidden;background:#d5dee3}
+.app.noanim .desk{flex:1;height:auto;margin-top:0}
+.scene canvas{display:block;width:100%;height:100%}
+.scene.shake{animation:shake .35s 3}
+.flash{position:absolute;inset:0;pointer-events:none;opacity:0;background:var(--orange)}
+.flash.go{animation:flashO .9s}
+.screenflash{position:fixed;inset:0;pointer-events:none;z-index:15;background:var(--crit);opacity:0;animation:sf 2.4s forwards}
+@keyframes shake{0%,100%{transform:none}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
+@keyframes flashO{0%{opacity:0}20%{opacity:.28}100%{opacity:0}}
+@keyframes sf{0%{opacity:0}20%{opacity:.35}40%{opacity:0}60%{opacity:.35}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.scene.shake{animation:none}.screenflash{display:none}}
+
+@media (max-width:900px){
+  .scene{position:relative;inset:auto;height:240px}
+  .app{height:auto}
+  .desk{grid-template-columns:minmax(0,1fr);height:auto;margin-top:0}
+  .queue{max-height:260px}
+  .chat{min-height:280px;max-height:55vh}
+  .sheet{padding:20px 16px}
+  .sheet h1{font-size:34px}
+}
+</style>
+
+<div id="scene" class="scene" hidden></div>
+<div class="app" id="app">
+  <header class="bar">
+    <div class="brand">下一位：Triage <small>EMERGENCY DEPARTMENT TRIAGE SIMULATOR</small></div>
+    <div class="stat clock"><b id="clock">22:00</b><span><button class="term" data-term="clock" type="button">班次時鐘</button></span></div>
+    <div class="stat"><b id="left">90</b><span>剩餘分鐘</span></div>
+    <div class="stat"><b><span id="bedsR">2</span> · <span id="bedsT">4</span></b><span><button class="term" data-term="beds" type="button">空床 急救·診療</button></span></div>
+    <div class="stat"><b id="doneN">0/8</b><span>已檢傷</span></div>
+    <div class="grow"></div>
+    <button class="ctl" id="aiBtn" hidden>AI 設定</button>
+    <button class="ctl" id="glossBtn">名詞解釋</button>
+    <button class="ctl" id="animBtn" aria-pressed="true" title="開關場景動畫">動畫</button>
+    <button class="ctl" id="endBtn">提早結算</button>
+    <button class="ctl" id="speedBtn" aria-pressed="false" title="時間流速">×2 流速</button>
+    <button class="ctl" id="pauseBtn">暫停</button>
+  </header>
+
+  <main class="desk">
+    <section class="col" aria-label="候診佇列">
+      <div class="colhead"><span>候診佇列</span><span class="mono" id="qcount">0</span></div>
+      <div class="queue scroll" id="queue"></div>
+      <div class="done scroll" id="done"><div class="empty">尚未完成檢傷</div></div>
+    </section>
+
+    <section class="col" aria-label="問診區">
+      <div id="ptHead" class="pthead" hidden></div>
+      <div id="idle" class="idle"><div class="big">下一位</div><div>從左側候診佇列點一位病患叫號，開始問診。</div><div class="note">卡片左緣顏色是<button class="term" data-term="look" type="button">外觀線索</button>，不是檢傷級數。看不懂的詞點虛線字。</div></div>
+      <div id="chat" class="chat scroll" hidden aria-live="polite"></div>
+      <div id="quick" class="quick" hidden></div>
+      <form id="askForm" class="ask" hidden>
+        <input id="askInput" autocomplete="off" placeholder="輸入你要問的問題，例如：痛多久了？" maxlength="200">
+        <button class="btn" id="askBtn" type="submit">問<span class="cost">30秒</span></button>
+        <button class="btn ghost" id="vitalBtn" type="button">量生命徵象<span class="cost">2分</span></button>
+        <button class="btn ghost" id="lookBtn" type="button">檢視外觀<span class="cost">30秒</span></button>
+      </form>
+    </section>
+
+    <section class="col" aria-label="檢傷單">
+      <div class="colhead"><span>檢傷單</span><span class="mono" id="formWho">—</span></div>
+      <form class="form scroll" id="triageForm">
+        <div class="field"><span class="lbl"><button class="term" data-term="vitals" type="button">生命徵象</button>（按「量生命徵象」才會出現）</span><div class="vitals" id="vitals"></div></div>
+        <div class="field"><span class="lbl"><button class="term" data-term="ttas" type="button">TTAS 級數</button>　拿不準時<button class="term" data-term="under" type="button">寧可判重</button></span>
+          <div class="levels" role="radiogroup" aria-label="TTAS 級數" id="levels"></div></div>
+        <div class="dest" id="dest"></div>
+        <button class="btn" id="submitBtn" type="submit" disabled>完成檢傷<span class="cost">1分</span></button>
+        <div class="toast" id="toast" role="status"></div>
+        <p class="note">送出後不會告訴你對錯，交班時再一起看。</p>
+      </form>
+    </section>
+  </main>
+</div>
+
+<div class="overlay" id="overlay"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+"use strict";
+/* ============ 常數 ============ */
+const SHIFT_MIN = 90;              // 班次長度（遊戲分鐘）
+const START_H = 22, START_M = 0;
+const RATE = 6;                    // 1 秒真實時間 = 6 秒遊戲時間
+const ALLOWED = {1:0,2:10,3:30,4:60,5:120};  // 容許等候（分鐘）
+const LVNAME = {1:"復甦急救",2:"危急",3:"緊急",4:"次緊急",5:"非緊急"};
+const BED_HOLD = 60;               // 床位佔用（分鐘）
+const COST = {ask:30, vitals:120, look:30, submit:60};
+const DEST = {1:["急救區","醫師立即處置，佔一張急救床"],2:["診療區","10 分鐘內由醫師看診，佔一張診療床"],3:["候診區","30 分鐘內由醫師看診"],4:["候診區","1 小時內由醫師看診"],5:["候診區","2 小時內由醫師看診"]};
+
+/* ============ 案例資料 ============
+   true_level / dx 只留在引擎端評分，不會放進給 AI 的提示。 */
+const CASES = [
+{ id:"sprain_m20", name:"張同學", age:20, sex:"男", arrive:0, mode:"同學扶進來", loud:true,
+  cc:"啊——我的腳！痛死了！快點幫我看啦！", short:"右腳踝扭到，大聲喊痛",
+  trueLevel:4, dx:"右踝扭傷", cat:"肌肉骨骼系統",
+  style:"大聲、誇張、一直喊痛，但回答問題時其實很清楚；用語很年輕。",
+  belief:"覺得自己骨頭斷了，要馬上照 X 光。",
+  clues:[
+    {id:"ankle_pain",label:"右踝疼痛",w:1,vol:true,who:"patient",fact:"右腳踝很痛"},
+    {id:"can_walk",label:"可自行承重行走",w:2,who:"patient",fact:"其實自己走得進來，只是會痛",when:"問到能不能走、站、踩地",kw:["走","站","踩","承重","自己"],line:"……是可以走啦，剛剛自己一跛一跛走進來的，就是很痛。",ask:"腳可以踩地走路嗎？"},
+    {id:"no_deformity",label:"無明顯變形",w:2,who:"patient",fact:"只有一點點腫，沒有變形",when:"問到腫、變形、外觀，或要求看傷處",kw:["變形","腫","歪","骨頭","外觀","看一下","給我看"],line:"腫一點點啦，沒有歪掉。",ask:"讓我看一下，有沒有變形？"},
+    {id:"mechanism",label:"受傷機轉：落地扭傷",w:1,who:"patient",fact:"打籃球落地踩到別人的腳扭到",when:"問到怎麼受傷、發生什麼事",kw:["怎麼","發生","受傷","跌","扭","打球"],line:"打籃球落地踩到別人的腳，拐了一下。",ask:"怎麼受傷的？"},
+    {id:"pain_score",label:"疼痛分數約 6 分",w:1,who:"patient",fact:"疼痛其實大約 6 分",when:"問到疼痛分數、幾分",kw:["幾分","分數","多痛","0到10","十分","1到10"],line:"十分！……好啦，大概六分。",ask:"0 到 10 分，現在痛幾分？"},
+    {id:"no_numbness",label:"末梢無麻木",w:1,who:"patient",fact:"腳趾可以動，沒有麻",when:"問到麻、腳趾、感覺",kw:["麻","腳趾","感覺","動一下"],line:"腳趾可以動，沒有麻。",ask:"腳趾會麻嗎？可以動嗎？"}],
+  vitals:{BP:"128/76",HR:92,RR:18,SpO2:99,T:36.8},
+  looks:["大聲喊痛，單腳跳，右腳踝輕微腫，臉色紅潤"], det:[],
+  family:{who:"同學",type:"焦慮施壓型",anx:55,persona:"一直插話催促，說朋友痛成這樣為什麼還要問那麼多，會拿出手機說要拍下來。",
+    lines:["他痛成這樣你們還在問？先給他止痛啦！","欸護理師，我們等很久了欸。","你們是不是要等人家斷掉才要看？"]},
+  filler:["痛啦！很痛！","你先幫我照 X 光啦，一定斷了。","可不可以快一點……"] },
+
+{ id:"ami_f64", name:"林女士", age:64, sex:"女", arrive:2, mode:"自行走入", loud:false,
+  cc:"上腹部悶悶的，有點想吐……應該是胃又在鬧了。", short:"上腹悶、想吐，覺得是胃痛",
+  trueLevel:2, dx:"下壁心肌梗塞（非典型表現）", cat:"心臟血管系統",
+  style:"客氣、輕聲、怕麻煩別人，會淡化自己的症狀，偶爾夾台語。",
+  belief:"認為是胃食道逆流、晚餐吃太油，只想拿胃藥。",
+  clues:[
+    {id:"upper_abd",label:"上腹悶痛",w:1,vol:true,who:"patient",fact:"上腹悶悶的、想吐"},
+    {id:"cold_sweat",label:"冒冷汗",w:3,who:"patient",fact:"剛剛一直冒冷汗，衣服都濕了",when:"問到流汗、冒冷汗、出汗",kw:["冷汗","流汗","出汗","盜汗","汗"],line:"你這樣說……剛剛是一直冒冷汗，衣服都濕了。",ask:"有沒有冒冷汗？"},
+    {id:"jaw_shoulder",label:"左肩到下巴痠痛（轉移痛）",w:3,who:"patient",fact:"左肩到下巴也痠痠的，她以為是落枕",when:"問到還有哪裡不舒服、痛會不會跑、肩膀下巴手臂",kw:["其他地方","哪裡","肩","下巴","手臂","牙","延伸","跑","還有"],line:"左邊肩膀到下巴也痠痠的，我以為是落枕。",ask:"除了肚子，還有哪裡不舒服？"},
+    {id:"duration",label:"持續超過一小時",w:2,who:"patient",fact:"晚上九點多開始，持續一個多小時沒停",when:"問到多久、什麼時候開始",kw:["多久","什麼時候","幾點","開始","持續"],line:"大概九點多開始的吧，一個多小時了，一直沒停。",ask:"痛多久了？有停過嗎？"},
+    {id:"exertion",label:"活動時加劇",w:2,who:"patient",fact:"走路時比較喘比較悶，坐著好一點",when:"問到活動、走路、會不會加劇、喘",kw:["活動","走路","爬樓梯","休息","加劇","更痛","喘"],line:"剛剛走過來的時候比較喘、比較悶，坐著好一點。",ask:"走路或活動時會更悶嗎？"},
+    {id:"history",label:"高血壓、糖尿病，服藥不規則",w:1,who:"patient",fact:"有高血壓跟糖尿病，藥常忘記吃",when:"問到病史、吃藥、慢性病",kw:["病史","以前","吃藥","高血壓","糖尿病","慢性","藥"],line:"有高血壓跟糖尿病啦，藥有時候會忘記吃。",ask:"以前有什麼慢性病？有在吃藥嗎？"}],
+  vitals:{BP:"148/92",HR:104,RR:20,SpO2:96,T:36.4}, vitals2:{BP:"132/84",HR:112,RR:24,SpO2:94,T:36.3},
+  looks:["臉色稍差，手按著上腹，說話正常","臉色轉白，額頭可見冷汗，坐不太住"],
+  det:[{after:20,stage:1},{after:35,collapse:true}],
+  family:{who:"先生",type:"沉默型",anx:30,persona:"沉默寡言，站在旁邊不說話；護理師直接問他時才會簡短回答，會說太太剛剛在家吐過一次、臉色很差。",
+    lines:["……她剛剛在家吐了一次。","（先生站在旁邊，沒有說話。）"]},
+  filler:["應該是胃啦，我胃本來就不好。","就是悶悶的，說不上來……","可以先給我胃藥就好嗎？不好意思麻煩你們。"] },
+
+{ id:"fever_c8", name:"小芸", age:8, sex:"女", arrive:6, mode:"媽媽抱進來", loud:true,
+  cc:"（媽媽）她燒到 39 度！你們快點幫她打退燒針！", short:"發燒 39 度，媽媽很急",
+  trueLevel:4, dx:"病毒感染發燒，活動力佳", cat:"一般和其他",
+  style:"8 歲小孩，講話短、有點害羞，大多由媽媽搶著回答。",
+  belief:"媽媽認為高燒會燒壞腦袋，一定要打針。",
+  clues:[
+    {id:"fever",label:"發燒 39 度",w:1,vol:true,who:"family",fact:"在家量到 39 度"},
+    {id:"active",label:"活動力佳",w:2,who:"family",fact:"在車上還在玩手機，精神還不錯",when:"問到精神、活動力、有沒有在玩、嗜睡",kw:["精神","玩","活動","嗜睡","叫得醒","有力"],line:"……剛剛在車上還在玩手機啦。",ask:"她精神怎麼樣？還會玩嗎？"},
+    {id:"drinking",label:"進食飲水與尿量正常",w:2,who:"family",fact:"有喝水，剛剛也有尿尿",when:"問到喝水、吃東西、尿尿",kw:["喝","吃","尿","水","食慾"],line:"水有喝，出門前也有尿尿。",ask:"有喝水嗎？今天有尿尿嗎？"},
+    {id:"no_red_flag",label:"無抽搐、頸僵硬、嘔吐",w:2,who:"family",fact:"沒有抽筋、沒有吐、脖子可以動",when:"問到抽筋、嘔吐、脖子、頭痛",kw:["抽","吐","脖子","頭痛","痙攣"],line:"沒有抽筋，也沒有吐，脖子可以轉。",ask:"有沒有抽筋、嘔吐或脖子硬？"},
+    {id:"no_rash",label:"無皮疹",w:1,who:"family",fact:"身上沒有紅點",when:"問到皮膚、紅疹、紅點",kw:["疹","紅點","皮膚","斑"],line:"身上沒有紅點。",ask:"身上有沒有紅疹？"},
+    {id:"onset",label:"今天下午才開始燒",w:1,who:"family",fact:"今天下午才開始發燒",when:"問到多久、什麼時候",kw:["多久","幾天","什麼時候","開始"],line:"今天下午才開始燒的。",ask:"燒多久了？"}],
+  vitals:{BP:"102/64",HR:118,RR:22,SpO2:98,T:38.8},
+  looks:["小孩臉頰紅紅的，靠在媽媽身上，手上拿著手機"], det:[],
+  family:{who:"媽媽",type:"焦慮施壓型",anx:75,persona:"非常焦慮，搶著回答，一直要求馬上打退燒針，說會燒壞腦袋；等越久音量越大，會說要客訴。被同理後會稍微冷靜。",
+    lines:["39 度欸！會不會燒壞腦袋？","你們到底要不要先幫她退燒？","我要客訴喔，小孩發燒你們還讓我們等！"]},
+  filler:["（小芸）……我想回家看卡通。","（小芸）嗯。","（小芸）我頭熱熱的。"] },
+
+{ id:"panic_m35", name:"黃先生", age:35, sex:"男", arrive:10, mode:"計程車來，自行走入", loud:true,
+  cc:"我胸口好痛！我是不是心臟病發作？我會不會死？", short:"胸痛，非常激動",
+  trueLevel:3, dx:"恐慌發作合併過度換氣", cat:"心臟血管系統",
+  style:"講話很快、很急，一直問自己會不會死，會打斷護理師。",
+  belief:"確定自己心肌梗塞，要求馬上做心電圖。",
+  clues:[
+    {id:"chest_pain",label:"胸痛",w:1,vol:true,who:"patient",fact:"胸口痛"},
+    {id:"tingling",label:"手與口周麻（過度換氣）",w:2,who:"patient",fact:"雙手跟嘴巴旁邊麻麻的",when:"問到麻、手",kw:["麻","手","刺麻"],line:"手跟嘴巴旁邊都麻麻的！這是不是很嚴重？",ask:"手或嘴巴會麻嗎？"},
+    {id:"sharp",label:"刺痛、一陣一陣，非壓迫感",w:2,who:"patient",fact:"是刺刺的、一陣一陣的痛，不是被壓住的感覺",when:"問到痛的感覺、怎麼痛、形容",kw:["什麼樣","感覺","怎麼痛","刺","壓","悶","形容","哪種"],line:"刺刺的，一陣一陣，不是壓著那種……",ask:"痛起來是什麼感覺？刺痛還是壓迫？"},
+    {id:"prior",label:"上月類似發作，心電圖正常",w:2,who:"patient",fact:"上個月也發作過，當時檢查心電圖正常",when:"問到以前、類似、第一次",kw:["以前","類似","第一次","之前","發作過"],line:"上個月也這樣一次，那次說心電圖正常……可是這次不一樣！",ask:"以前有沒有類似的狀況？"},
+    {id:"stress",label:"近期壓力大、失眠",w:1,who:"patient",fact:"最近公司裁員，好幾天沒睡好",when:"問到壓力、工作、睡眠、最近",kw:["壓力","工作","最近","睡","失眠"],line:"最近公司在裁員，我好幾天沒睡了。",ask:"最近壓力大嗎？睡得好嗎？"},
+    {id:"rest_onset",label:"休息時發作、與活動無關",w:1,who:"patient",fact:"在家滑手機時突然開始，沒有在活動",when:"問到活動、運動、什麼情況下開始",kw:["活動","運動","走路","休息","加劇","在做什麼","怎麼開始"],line:"在家裡滑手機突然開始的，沒有在動。",ask:"痛的時候在做什麼？"}],
+  vitals:{BP:"138/86",HR:112,RR:28,SpO2:99,T:36.7},
+  looks:["呼吸很快，一直抓著胸口，講話很急，臉色正常"], det:[],
+  family:null,
+  filler:["你們可不可以先幫我做心電圖！","我真的會不會死？","我覺得我快不能呼吸了……"] },
+
+{ id:"cut_m55", name:"劉先生", age:55, sex:"男", arrive:14, mode:"自行走入", loud:true,
+  cc:"切菜割到手指而已，血流成這樣，你們要讓我等多久？", short:"切菜割傷手指，不耐煩",
+  trueLevel:5, dx:"手指小撕裂傷，出血已止", cat:"皮膚（含撕裂傷）",
+  style:"不耐煩、愛抱怨等太久，講話很衝，但不是壞人。",
+  belief:"覺得流很多血，需要馬上縫。",
+  clues:[
+    {id:"finger_cut",label:"左手食指割傷",w:1,vol:true,who:"patient",fact:"切菜割到左手食指"},
+    {id:"bleed_stop",label:"加壓後出血已止",w:2,who:"patient",fact:"壓著就沒在流了",when:"問到還有沒有流血、止血、壓",kw:["血","止","還在流","壓"],line:"壓著就沒在流了啦，剛剛流很多。",ask:"現在還有在流血嗎？"},
+    {id:"small",label:"傷口約 1 公分、淺",w:2,who:"patient",fact:"傷口大約一公分，不深",when:"問到傷口大小深淺，或要求看傷口",kw:["多大","多深","傷口","看","打開"],line:"一公分吧，沒有很深。",ask:"傷口我看一下，大概多大？"},
+    {id:"no_numb",label:"手指活動與感覺正常",w:1,who:"patient",fact:"手指可以彎，沒有麻",when:"問到麻、能不能動、感覺",kw:["麻","動","感覺","彎"],line:"手指可以彎啦，沒有麻。",ask:"手指會麻嗎？可以彎嗎？"},
+    {id:"tetanus",label:"破傷風疫苗多年前施打",w:1,who:"patient",fact:"破傷風好幾年前打過",when:"問到破傷風、疫苗",kw:["破傷風","疫苗","打針"],line:"破傷風？好幾年前打過吧。",ask:"破傷風疫苗多久前打的？"},
+    {id:"no_anticoag",label:"無服用抗凝血劑",w:1,who:"patient",fact:"沒有吃什麼藥",when:"問到吃藥、病史、抗凝血",kw:["吃藥","病史","抗凝血","阿斯匹靈","慢性","藥"],line:"沒有在吃什麼藥。",ask:"有沒有在吃抗凝血劑？"}],
+  vitals:{BP:"146/90",HR:88,RR:16,SpO2:99,T:36.6},
+  looks:["左手食指纏著衛生紙，表情不耐煩，臉色正常"], det:[],
+  family:null,
+  filler:["我很忙欸，等一下還要回店裡。","你們效率可不可以好一點？","就割到而已啊，縫一縫就好了。"] },
+
+{ id:"sepsis_m78", name:"王阿公", age:78, sex:"男", arrive:18, mode:"女兒推輪椅", loud:false,
+  cc:"（女兒）我爸今天怪怪的，講話亂七八糟的。", short:"長者意識混亂，女兒代訴",
+  trueLevel:2, dx:"泌尿道感染合併敗血症", cat:"神經系統",
+  style:"意識混亂，只講台語短句，答非所問，常說想回家；大部分要靠女兒回答。",
+  belief:"（女兒）以為只是老人家累了、天氣熱。",
+  clues:[
+    {id:"confusion",label:"急性意識混亂",w:2,vol:true,who:"family",fact:"今天突然講話亂七八糟"},
+    {id:"baseline",label:"平時意識清楚、今日下午急性改變",w:2,who:"family",fact:"平常很清楚，會自己去公園下棋，今天下午才變這樣",when:"問到平常的樣子、什麼時候開始、多久",kw:["平常","之前","本來","多久","什麼時候","開始"],line:"他平常很清楚的，會自己去公園下棋，今天下午才變這樣。",ask:"他平常的狀況怎麼樣？什麼時候開始變的？"},
+    {id:"fever_home",label:"在家疑似發燒",w:2,who:"family",fact:"昨晚摸起來燙燙的",when:"問到發燒、體溫",kw:["發燒","燒","體溫","燙"],line:"昨天晚上摸起來有點燙，我以為是天氣熱。",ask:"這幾天有沒有發燒？"},
+    {id:"chills",label:"畏寒顫抖",w:2,who:"family",fact:"中午一直發抖，蓋被子還在抖",when:"問到發抖、冷、寒顫",kw:["發抖","冷","寒顫","抖"],line:"中午一直發抖，蓋被子還在抖。",ask:"有沒有發抖、覺得冷？"},
+    {id:"catheter",label:"攝護腺問題，上週換尿管",w:3,who:"family",fact:"有攝護腺問題，上禮拜才換過尿管",when:"問到病史、慢性病、管路、尿",kw:["病史","以前","管","尿","慢性","吃藥","生病"],line:"他有攝護腺的問題，上禮拜才換過尿管。尿這兩天顏色很深。",ask:"他有什麼病史？身上有沒有管路？"},
+    {id:"intake",label:"進食差、尿量少",w:1,who:"family",fact:"今天幾乎沒吃，尿很少",when:"問到吃東西、喝水",kw:["吃","喝","食慾","水"],line:"今天幾乎沒吃東西，水也喝很少。",ask:"今天有吃東西喝水嗎？"}],
+  vitals:{BP:"88/54",HR:122,RR:26,SpO2:92,T:39.1}, vitals2:{BP:"78/46",HR:134,RR:30,SpO2:89,T:39.4},
+  looks:["坐輪椅，眼神渙散，嘴唇乾裂，一直想站起來","嗜睡、叫不太醒，呼吸又淺又快"],
+  det:[{after:22,stage:1},{after:42,collapse:true}],
+  family:{who:"女兒",type:"代訴型",anx:50,persona:"本人說不清楚，女兒代替回答；她有點慌，但很配合，只回答被問到的事。",
+    lines:["阿爸，護理師在問你啦……他平常不會這樣的。","他是不是太累了？"]},
+  filler:["（王阿公）我欲轉去啦……","（王阿公）遮是佗位？","（王阿公）……冷。"] },
+
+{ id:"ectopic_f28", name:"陳小姐", age:28, sex:"女", arrive:24, mode:"自行走入", loud:false,
+  cc:"肚子下面有點痛……應該是生理痛吧，可以拿止痛藥就好嗎？", short:"下腹痛，自認生理痛",
+  trueLevel:2, dx:"子宮外孕破裂、內出血", cat:"泌尿生殖／婦產",
+  style:"安靜、很客氣、不想給人添麻煩，對私密問題會遲疑一下才回答。",
+  belief:"認為只是生理痛加上最近壓力大。",
+  clues:[
+    {id:"lower_abd",label:"下腹痛",w:1,vol:true,who:"patient",fact:"下腹痛"},
+    {id:"missed_period",label:"月經遲了兩週",w:3,who:"patient",fact:"月經晚了大約兩個禮拜，她以為是壓力",when:"問到月經、最後一次經期、懷孕可能、性行為",kw:["月經","經期","生理期","懷孕","最後一次","性行為","MC","LMP"],line:"……月經好像晚了兩個禮拜，我以為是壓力大。",ask:"最後一次月經是什麼時候？有沒有可能懷孕？"},
+    {id:"dizzy",label:"起身頭暈、眼前發黑",w:2,who:"patient",fact:"剛剛在廁所站起來眼前一黑，差點跌倒",when:"問到頭暈、昏倒、站起來",kw:["頭暈","暈","站","昏","發黑","跌倒"],line:"剛剛在廁所站起來的時候眼前一黑，差點跌倒。",ask:"會頭暈嗎？有沒有快昏倒？"},
+    {id:"shoulder",label:"右肩痛（膈下刺激）",w:2,who:"patient",fact:"右邊肩膀也有點怪怪的痛",when:"問到其他地方、肩膀、痛會不會跑",kw:["其他地方","肩","哪裡","延伸","還有","跑"],line:"右邊肩膀也有點怪怪的痛……這有關係嗎？",ask:"還有哪裡不舒服嗎？"},
+    {id:"spotting",label:"少量陰道出血",w:2,who:"patient",fact:"有一點點咖啡色出血",when:"問到出血、分泌物",kw:["出血","流血","分泌物","陰道","血"],line:"有一點點出血，咖啡色的。",ask:"有沒有陰道出血？"},
+    {id:"sudden",label:"一小時前突發且加劇",w:1,who:"patient",fact:"一個小時前突然痛起來，越來越痛",when:"問到多久、什麼時候、怎麼開始",kw:["多久","什麼時候","突然","開始"],line:"一個小時前突然痛起來，越來越痛。",ask:"什麼時候開始痛的？"}],
+  vitals:{BP:"96/58",HR:116,RR:20,SpO2:98,T:36.6}, vitals2:{BP:"84/50",HR:128,RR:24,SpO2:97,T:36.4},
+  looks:["彎著腰坐著，雙手按下腹，說話小聲","臉色蒼白、嘴唇沒血色、額頭冒冷汗"],
+  det:[{after:16,stage:1},{after:30,collapse:true}],
+  family:null,
+  filler:["應該沒事吧……我休息一下就好。","不好意思，可以先給我止痛藥嗎？","嗯……還是有點痛。"] },
+
+{ id:"dissect_m50", name:"李先生", age:50, sex:"男", arrive:30, mode:"太太開車載來", loud:false,
+  cc:"背……應該是閃到腰吧，突然很痛。", short:"背痛，說是閃到腰",
+  trueLevel:1, dx:"急性主動脈剝離", cat:"心臟血管系統",
+  style:"很能忍、話少、不喜歡麻煩別人，回答很短，會說「還好」。",
+  belief:"覺得只是閃到腰，是太太大驚小怪。",
+  clues:[
+    {id:"back_pain",label:"背痛",w:1,vol:true,who:"patient",fact:"背很痛"},
+    {id:"wife_warning",label:"家屬：他從不喊痛，今天臉都白了",w:3,who:"family",volTurn:2,fact:"太太說他從來不喊痛，今天臉都白了、一直流汗",when:"第二回合時太太會自己插話說出來",kw:["太太","家屬","妳覺得","你覺得"],line:"護理師，他從來不喊痛的！今天臉都白了，一直流汗……你們一定要先看他。",ask:"（聽家屬說：他平常會這樣喊痛嗎？）"},
+    {id:"tearing",label:"撕裂樣痛，由胸後往下",w:3,who:"patient",fact:"像有東西被撕開，從胸口後面一路往下腰",when:"問到痛的感覺、怎麼痛、形容、痛的位置怎麼跑",kw:["感覺","怎麼痛","什麼樣","形容","撕","裂","跑","延伸","哪種"],line:"……像有東西被撕開，從胸口後面一路往下到腰。",ask:"痛起來是什麼感覺？會往哪裡跑？"},
+    {id:"sudden",label:"半小時前瞬間發作",w:2,who:"patient",fact:"半小時前坐著看電視時一瞬間痛起來，不是搬東西",when:"問到怎麼開始、多久、什麼時候、有沒有搬重物",kw:["突然","慢慢","怎麼開始","什麼時候","多久","搬","閃到"],line:"一瞬間……大概半小時前，坐著看電視就痛了。沒有搬東西。",ask:"是突然痛，還是慢慢痛？當時在做什麼？"},
+    {id:"htn",label:"高血壓未規則服藥",w:3,who:"family",fact:"血壓很高，醫生開的藥都不吃",when:"問到病史、血壓、吃藥",kw:["病史","高血壓","血壓","吃藥","慢性","藥"],line:"他血壓很高，醫生開的藥都不吃！",ask:"有沒有高血壓？有在吃藥嗎？"},
+    {id:"leg_weak",label:"左腳麻、無力",w:2,who:"patient",fact:"左腳麻麻的，沒什麼力",when:"問到腳、麻、無力、走路",kw:["腳","麻","無力","走","力氣"],line:"左腳有點麻麻的……沒什麼力。",ask:"手腳會麻或沒力嗎？"}],
+  vitals:{BP:"192/112（左右臂差 30）",HR:98,RR:22,SpO2:97,T:36.5}, vitals2:{BP:"104/66",HR:124,RR:28,SpO2:94,T:36.2},
+  looks:["坐得很直不敢動，額頭有汗，表情壓抑","臉色灰白、全身冒冷汗，坐不住"],
+  det:[{after:8,stage:1},{after:20,collapse:true}],
+  family:{who:"太太",type:"應該被相信卻沒人聽型",anx:65,persona:"很急，會主動強調先生平常從不喊痛、今天臉色不對；她說的是關鍵線索，但容易被當成家屬太緊張。被問到時會說出先生高血壓不吃藥。",
+    lines:["拜託你們先看他，他真的不對勁。","他平常不是這樣的……"]},
+  filler:["還好……忍得住。","應該閃到腰吧，給我貼布就好。","……嗯。"] },
+
+{ id:"stroke_m72", name:"吳永福", age:72, sex:"男", arrive:0, mode:"太太陪同自行走入", loud:false,
+  cc:"太太硬要我來的啦，我覺得沒怎樣，就右手有點麻。", short:"右手麻，被太太拉來",
+  trueLevel:2, dx:"急性缺血性腦中風（仍在溶栓黃金時間內）", cat:"神經系統",
+  job:"退休計程車司機",
+  story:"早上六點起床時還正常，七點吃早餐時筷子一直掉，太太發現他講話怪怪的。有心律不整，醫生開的血液稀釋藥嫌會瘀青自己停了。",
+  style:"講話有點含糊、慢，會一直說沒事；會夾台語，不喜歡被當病人。",
+  belief:"覺得是睡覺壓到手，休息一下就好。",
+  clues:[
+    {id:"arm_numb",label:"右手麻",w:1,vol:true,who:"patient",fact:"右手麻麻的"},
+    {id:"last_well",label:"最後正常時間：約一個半小時前",w:3,who:"family",fact:"早上六點起床時還好好的，七點吃早餐開始不對，到現在約一個半小時",when:"問到什麼時候開始、最後一次正常、多久、突然",kw:["什麼時候","多久","開始","最後","幾點","突然"],line:"早上六點起床還好好的，七點吃早餐筷子就一直掉，到現在大概一個半小時。",ask:"最後一次看他完全正常是幾點？"},
+    {id:"slurred",label:"口齒不清（與平常不同）",w:3,who:"family",fact:"講話跟平常不一樣，黏黏的、像含著東西",when:"問到講話、說話、口齒、跟平常比",kw:["講話","說話","口齒","咬字","平常"],line:"他講話跟平常不一樣，黏黏的，像嘴巴含著東西。",ask:"他講話跟平常一樣嗎？"},
+    {id:"face_droop",label:"右側嘴角下垂",w:2,who:"patient",fact:"笑的時候右邊嘴角垂下來，自己沒發現",when:"請他笑、問到臉、嘴角",kw:["笑","臉","嘴","歪"],line:"（笑起來右邊嘴角明顯垂下來）有歪嗎？我自己看不到啦。",ask:"請你笑一下給我看。"},
+    {id:"leg_weak",label:"右腳也無力",w:2,who:"patient",fact:"右腳也有點拖，走路不穩",when:"問到腳、走路、無力、雙手平舉",kw:["腳","走","無力","力氣","舉"],line:"右腳也有點拖啦，走路比較不穩。",ask:"兩手平舉看看，腳有沒有力？"},
+    {id:"afib_stop",label:"心律不整、自行停用抗凝血藥",w:2,who:"family",fact:"有心律不整，血液稀釋的藥自己停了",when:"問到病史、吃藥、心臟",kw:["病史","吃藥","心臟","慢性","藥","抗凝血"],line:"他有心律不整，醫生開血液稀釋的藥，他嫌會瘀青就自己停了！",ask:"有什麼病史？藥有規則吃嗎？"}],
+  vitals:{BP:"178/96",HR:104,RR:18,SpO2:96,T:36.6,note:"心跳不規則"}, vitals2:{BP:"186/100",HR:110,RR:20,SpO2:95,T:36.6,note:"心跳不規則"},
+  looks:["坐著，右手放在腿上不太動，講話慢","右邊臉明顯下垂，講話越來越含糊，眼神變呆"],
+  det:[{after:20,stage:1},{after:40,collapse:true}],
+  family:{who:"太太",type:"應該被相信卻沒人聽型",anx:60,persona:"很著急，一直說他講話跟平常不一樣；先生一直打斷她說沒事。她清楚記得早上幾點開始不對。",
+    lines:["他真的講話怪怪的啦，你聽聽看。","你不要再說沒事了！"]},
+  filler:["沒事啦，手壓到而已。","休息一下就好了……","你們忙的話，我先回去。"] },
+
+{ id:"co_f34", name:"蔡佩珊", age:34, sex:"女", arrive:0, mode:"抱著兒子自行走入", loud:false,
+  cc:"頭很痛、想吐……應該是感冒吧，我兒子好像也被我傳染了。", short:"頭痛想吐，兒子也不舒服",
+  trueLevel:2, dx:"一氧化碳中毒（熱水器通風不良），兒子同樣中毒", cat:"一般和其他",
+  job:"補習班老師",
+  story:"住老公寓，寒流來把陽台窗戶都關緊，熱水器裝在陽台。晚上九點洗完澡後開始頭痛，兒子洗完也說頭暈想睡。先生出差不在家。",
+  style:"講話有條理但很累，一直揉太陽穴；擔心兒子多過自己。",
+  belief:"以為是流感，一家人互相傳染。",
+  clues:[
+    {id:"headache",label:"頭痛、想吐",w:1,vol:true,who:"patient",fact:"頭很痛、想吐"},
+    {id:"family_same",label:"同住家人同時出現相同症狀",w:3,who:"patient",fact:"兒子也一樣頭痛想吐、一直想睡，兩人差不多同時開始",when:"問到家人、其他人、兒子、有沒有一樣",kw:["家人","別人","其他人","兒子","一樣","一起"],line:"對啊，我兒子也一樣頭痛想吐，還一直想睡，我們差不多同時開始的。",ask:"家裡其他人有沒有一樣的症狀？"},
+    {id:"heater",label:"洗澡後發作，熱水器在密閉陽台",w:3,who:"patient",fact:"洗完澡沒多久開始；熱水器在陽台，這幾天很冷窗戶都關起來",when:"問到什麼時候開始、在做什麼、熱水器、瓦斯、窗戶、家裡環境",kw:["什麼時候","開始","洗澡","熱水器","瓦斯","窗","在做什麼","環境","家裡"],line:"洗完澡沒多久就開始了……熱水器在陽台，這幾天很冷我把窗戶都關起來了。",ask:"症狀是做什麼的時候開始的？熱水器裝在哪裡？"},
+    {id:"no_fever",label:"沒有發燒、沒有呼吸道症狀",w:2,who:"patient",fact:"沒發燒，也沒咳嗽流鼻水",when:"問到發燒、咳嗽、流鼻水、喉嚨",kw:["發燒","燒","體溫","咳","鼻","喉嚨"],line:"沒有發燒，也沒有咳嗽流鼻水。",ask:"有沒有發燒、咳嗽、流鼻水？"},
+    {id:"slow",label:"頭暈、視力模糊、反應變慢",w:2,who:"patient",fact:"頭很暈，開車來時差點闖紅燈，眼睛花",when:"問到頭暈、視力、反應、想睡",kw:["頭暈","暈","視力","模糊","反應","想睡"],line:"頭很暈，剛剛開車來還差點闖紅燈，眼睛有點花。",ask:"會頭暈、看東西模糊嗎？"},
+    {id:"vomit",label:"在家嘔吐一次",w:1,who:"patient",fact:"在家吐了一次",when:"問到吐、噁心",kw:["吐","噁心"],line:"在家吐了一次。",ask:"有沒有吐？"}],
+  vitals:{BP:"124/78",HR:108,RR:22,SpO2:98,T:36.8}, vitals2:{BP:"118/74",HR:116,RR:24,SpO2:98,T:36.8},
+  looks:["臉色紅潤，按著太陽穴，兒子靠在她身上睡","講話變慢、眼神渙散，兒子叫不太醒"],
+  det:[{after:22,stage:1},{after:42,collapse:true}],
+  family:{who:"兒子",type:"沉默型",anx:30,persona:"6 歲兒子，昏昏欲睡靠在媽媽身上；被直接問才小聲說頭痛想吐。",
+    lines:["媽媽，我頭好痛……","（靠在媽媽身上，眼睛快閉起來）"]},
+  filler:["是不是流感？可以先幫我兒子看嗎？","頭真的好痛……","我先生出差，家裡只有我們兩個。"] },
+
+{ id:"hypo_m66", name:"鄭文雄", age:66, sex:"男", arrive:0, mode:"超商店員陪同，救護車送來", loud:false,
+  cc:"（店員）他在店裡一直冒汗、講話亂七八糟，我們以為他喝醉了。", short:"冒汗、講話亂，被當成喝醉",
+  trueLevel:2, dx:"低血糖（打胰島素後沒進食）", cat:"神經系統",
+  job:"退休公務員",
+  story:"糖尿病打胰島素多年，今天早上照常打針，出門到河堤快走後沒吃早餐，到超商買麵包時開始冒冷汗、手抖、講話亂。",
+  style:"反應慢、講話含糊又重複，手一直抖，偶爾答非所問；很有禮貌，一直說謝謝。",
+  belief:"覺得自己只是有點累。",
+  clues:[
+    {id:"sweating",label:"大量冒汗、言語混亂",w:1,vol:true,who:"family",fact:"一直冒汗、講話亂"},
+    {id:"no_alcohol",label:"沒有酒味、沒有喝酒",w:2,who:"family",fact:"身上沒有酒味，他是來買麵包的",when:"問到喝酒、酒味",kw:["喝酒","酒","喝醉","酒味"],line:"其實他身上沒有酒味啦，他是來買麵包的。",ask:"他有喝酒嗎？身上有酒味嗎？"},
+    {id:"insulin",label:"糖尿病，今早打胰島素",w:3,who:"patient",fact:"有糖尿病，早上有打胰島素",when:"問到病史、糖尿病、胰島素、打針、吃藥、血糖",kw:["病史","糖尿病","胰島素","打針","吃藥","慢性","藥","血糖"],line:"我……有糖尿病……早上有打針……",ask:"有沒有糖尿病？今天有打胰島素嗎？"},
+    {id:"no_meal",label:"運動後沒進食",w:3,who:"patient",fact:"早上打針後去運動，還沒吃東西",when:"問到吃東西、早餐",kw:["吃","早餐","飯","東西"],line:"早上……運動完……還沒吃……",ask:"今天有吃東西嗎？"},
+    {id:"tremor",label:"手抖、心悸",w:1,who:"patient",fact:"手一直抖、心跳很快",when:"問到抖、心悸",kw:["抖","手","心悸","心跳"],line:"手一直抖……心臟砰砰跳。",ask:"手會抖嗎？會心悸嗎？"},
+    {id:"onset",label:"二十分鐘前在店內發作",w:1,who:"family",fact:"大概二十分鐘前結帳時開始怪怪的",when:"問到多久、什麼時候",kw:["多久","什麼時候","開始"],line:"大概二十分鐘前結帳的時候開始怪怪的。",ask:"什麼時候開始的？"}],
+  vitals:{BP:"142/86",HR:112,RR:18,SpO2:98,T:36.2,note:"指尖血糖 42"}, vitals2:{BP:"138/84",HR:118,RR:18,SpO2:98,T:36.0,note:"指尖血糖 35"},
+  looks:["滿身大汗、手在抖，眼神有點呆","叫名字反應很慢，開始坐不穩"],
+  det:[{after:15,stage:1},{after:32,collapse:true}],
+  family:{who:"超商店員",type:"代訴型",anx:40,persona:"不認識病人的超商店員，只知道店裡看到的狀況；有點想趕快回去上班，但很配合。",
+    lines:["我還要回去顧店，他就交給你們喔……","他一直跟我說謝謝，可是講話怪怪的。"]},
+  filler:["謝謝……謝謝你……","我……在哪裡？","我要回家……"] },
+
+{ id:"asthma_f17", name:"許芷晴", age:17, sex:"女", arrive:0, mode:"同學陪同搭計程車來", loud:false,
+  cc:"我……有吸藥了……只是……有點喘……", short:"喘，講話斷斷續續",
+  trueLevel:2, dx:"氣喘急性嚴重發作", cat:"呼吸系統",
+  job:"高二學生",
+  story:"補習班下課走去搭公車，路上有人燒金紙、煙很大，開始喘。一小時內已經吸了五次急救吸入劑都沒用。國三時曾因氣喘住過加護病房。",
+  style:"一次只能講兩三個字，講完要喘一下；不想麻煩別人，一直說自己有吸藥了，怕被媽媽罵。",
+  belief:"覺得再吸一次藥就好。",
+  clues:[
+    {id:"sob",label:"喘",w:1,vol:true,who:"patient",fact:"很喘"},
+    {id:"overuse",label:"一小時內用急救吸入劑五次無效",w:3,who:"patient",fact:"一小時內吸了五次急救吸入劑，沒有改善",when:"問到吸藥、藥、幾次、有沒有效",kw:["吸藥","藥","吸入","幾次","噴","有效"],line:"吸……五次了……沒什麼用……",ask:"藥吸了幾次？有效嗎？"},
+    {id:"prior_icu",label:"曾因氣喘住加護病房",w:3,who:"patient",fact:"國三時因為氣喘住過加護病房",when:"問到以前、住院、最嚴重的一次、病史",kw:["以前","住院","加護","插管","病史","類似","嚴重"],line:"國三……有住過……加護病房……",ask:"以前發作最嚴重時有住院嗎？"},
+    {id:"trigger",label:"吸到燒金紙的煙誘發",w:1,who:"patient",fact:"路上有人燒金紙，吸到煙開始",when:"問到怎麼開始、什麼時候、煙",kw:["怎麼開始","什麼時候","煙","多久","開始"],line:"路上……有人燒金紙……煙很大……",ask:"怎麼開始喘的？"},
+    {id:"cant_lie",label:"無法平躺",w:2,who:"patient",fact:"躺下更喘，只能坐著前傾",when:"問到躺、姿勢",kw:["躺","姿勢","坐","睡"],line:"不能躺……躺下……更喘……",ask:"可以躺平嗎？"},
+    {id:"words_only",label:"說話無法成句（同學補充）",w:2,who:"family",fact:"同學說她平常講話很快，現在一句話講不完、嘴唇有點紫",when:"問到平常、講話，或問同學",kw:["平常","講話","說話","同學","你覺得","嘴唇"],line:"她平常講話超快的，現在一句話都講不完，你看她嘴唇！",ask:"她平常講話也這樣嗎？"}],
+  vitals:{BP:"128/80",HR:128,RR:32,SpO2:90,T:36.9}, vitals2:{BP:"122/76",HR:140,RR:36,SpO2:86,T:36.9},
+  looks:["坐著身體前傾，肩膀用力在呼吸，聽得到咻咻聲","嘴唇發紫、呼吸變淺，咻咻聲反而變小"],
+  det:[{after:14,stage:1},{after:28,collapse:true}],
+  family:{who:"同學",type:"焦慮施壓型",anx:70,persona:"同班同學，很慌，一直催促、說她快不能呼吸了；被問到會說她平常講話很快。",
+    lines:["拜託快點，她快不能呼吸了！","她剛剛在公車站差點倒下來！"]},
+  filler:["我……還好……","可以……再吸一次……藥嗎……","不要……打給……我媽……"] },
+
+{ id:"fish_f45", name:"郭美玲", age:45, sex:"女", arrive:0, mode:"自行走入", loud:true,
+  cc:"魚刺卡在喉嚨啦！吞飯也吞不下去，好痛！你們趕快幫我夾出來！", short:"魚刺卡喉，很急",
+  trueLevel:4, dx:"魚刺卡在扁桃腺附近，呼吸道無危險", cat:"腸胃系統",
+  job:"市場魚攤老闆娘",
+  story:"晚餐吃虱目魚肚被細刺卡到，照長輩說的吞了一大口白飯又喝醋，結果更痛。明天凌晨四點還要去批貨。",
+  style:"大嗓門、講話很快，一直清喉嚨，夾雜台語，很急但很熱情。",
+  belief:"覺得要馬上照胃鏡，不然會刺穿喉嚨。",
+  clues:[
+    {id:"bone",label:"魚刺卡喉",w:1,vol:true,who:"patient",fact:"魚刺卡在喉嚨"},
+    {id:"breath_ok",label:"呼吸正常",w:2,who:"patient",fact:"呼吸沒問題，只有吞的時候刺痛",when:"問到喘、呼吸",kw:["喘","呼吸","吸不到"],line:"呼吸是沒問題啦，就是吞的時候刺刺的。",ask:"呼吸會不會喘？"},
+    {id:"saliva_ok",label:"可吞口水",w:2,who:"patient",fact:"口水吞得下去，吞的時候右邊刺一下",when:"問到口水、吞、喝水",kw:["口水","吞","喝水"],line:"口水吞得下去啦，只是吞的時候右邊刺一下。",ask:"口水吞得下去嗎？"},
+    {id:"location",label:"位置在右側上方",w:2,who:"patient",fact:"可以指出在右邊上面一點",when:"問到位置、哪邊、請她指出來",kw:["哪裡","位置","左邊","右邊","指","哪一邊"],line:"這裡啦，右邊上面一點（指著右側下顎下方）。",ask:"可以指給我看卡在哪裡嗎？"},
+    {id:"rice",label:"吞飯喝醋後更痛",w:1,who:"patient",fact:"吞了白飯又喝醋，結果更痛",when:"問到自己怎麼處理、吃了什麼",kw:["處理","醋","飯","做了什麼","吃了"],line:"我有吞白飯喝醋啊，阿嬤說這樣會下去，結果更痛！",ask:"有自己處理過嗎？"},
+    {id:"no_blood",label:"無咳血、嘔吐",w:1,who:"patient",fact:"沒有咳血也沒有吐",when:"問到血、吐、咳",kw:["血","吐","咳"],line:"沒有咳血，也沒有吐。",ask:"有沒有咳血或吐血？"}],
+  vitals:{BP:"136/84",HR:96,RR:18,SpO2:99,T:36.7},
+  looks:["一直清喉嚨、皺眉，講話聲音正常又大聲"], det:[],
+  family:null,
+  filler:["哎唷，趕快夾出來啦！","會不會刺穿啊？","我明天四點還要去批貨欸。"] },
+
+{ id:"drunk_m42", name:"周俊傑", age:42, sex:"男", arrive:0, mode:"員警陪同送來", loud:true,
+  cc:"我沒醉啦！叫那個警察走開……我要回家！", short:"喝醉吵鬧，員警陪同",
+  trueLevel:2, dx:"頭部外傷合併顱內出血（服用抗凝血藥）", cat:"神經系統",
+  job:"工地工頭",
+  story:"下班和工人在熱炒店喝了半打啤酒，出來時在騎樓台階跌倒撞到後腦。三年前換過心臟瓣膜，每天吃心臟科開的血液稀釋藥。路人報警。",
+  style:"大聲、口齒不清、情緒起伏大，會罵人但被溫和對待會比較配合；一直想站起來離開。",
+  belief:"覺得自己只是喝多了，頭撞一下沒什麼。",
+  clues:[
+    {id:"drunk",label:"酒醉",w:1,vol:true,who:"patient",fact:"喝醉、很吵"},
+    {id:"head_hit",label:"跌倒撞到後腦",w:3,who:"patient",fact:"在騎樓台階跌倒撞到後腦，腫一包",when:"問到有沒有跌倒、撞到、頭、受傷",kw:["撞","跌","頭","受傷","怎麼了"],line:"啊就……台階……跌倒撞到後腦啦，腫一包而已。",ask:"有沒有跌倒撞到頭？"},
+    {id:"anticoag",label:"心臟瓣膜術後，服用抗凝血藥",w:3,who:"patient",fact:"三年前換心臟瓣膜，每天吃血液稀釋的藥",when:"問到吃藥、病史、心臟、開刀",kw:["吃藥","藥","病史","心臟","抗凝血","慢性","手術","開刀"],line:"我心臟……開過刀……每天吃那個……血液稀釋的藥……",ask:"有在吃什麼藥？有沒有抗凝血劑？"},
+    {id:"vomit",label:"警車上嘔吐兩次",w:2,who:"family",fact:"他在警車上吐了兩次",when:"問到吐、噁心，或問員警",kw:["吐","噁心","車上","警察","你覺得"],line:"他在警車上吐了兩次。",ask:"有沒有吐？"},
+    {id:"headache",label:"頭痛越來越嚴重",w:2,who:"patient",fact:"頭越來越痛",when:"問到頭痛、會不會越來越痛",kw:["頭痛","痛","越來越"],line:"頭……越來越痛啦……好吵……",ask:"頭會痛嗎？有沒有越來越痛？"},
+    {id:"amount",label:"半打啤酒",w:1,who:"patient",fact:"喝了半打啤酒，平常酒量很好",when:"問到喝多少",kw:["喝多少","喝了","幾瓶","酒"],line:"半打啤酒而已，平常我喝一手都沒事！",ask:"喝了多少？"}],
+  vitals:{BP:"168/98",HR:58,RR:14,SpO2:96,T:36.4}, vitals2:{BP:"182/104",HR:52,RR:10,SpO2:93,T:36.4},
+  looks:["滿身酒味、講話大聲，後腦有一個腫包","變得很想睡，叫名字要很大聲才張眼"],
+  det:[{after:18,stage:1},{after:34,collapse:true}],
+  family:{who:"員警",type:"焦慮施壓型",anx:55,persona:"派出所員警，想趕快交差，一直說他只是喝醉、讓他睡一下就好；被問到才說他在警車上吐了兩次。",
+    lines:["他就喝醉而已啦，讓他睡一下就好。","我們還有案子，可以先簽收嗎？"]},
+  filler:["我沒醉！","你們很煩欸……我要回家。","頭……好吵……"] },
+
+{ id:"fs_c2", name:"林小安", age:2, sex:"男", arrive:0, mode:"爸媽抱進來", loud:true,
+  cc:"（媽媽）他剛剛在家抽筋！全身一直抖、眼睛往上吊！救救他！", short:"2 歲在家抽筋，爸媽很慌",
+  trueLevel:3, dx:"單純型熱性痙攣，發作後已恢復", cat:"一般和其他",
+  job:"幼兒",
+  story:"傍晚開始發燒，晚上在客廳突然全身抽搐約兩分鐘，爸爸慌張把湯匙塞進他嘴巴。現在已經醒來在大哭。第一次發作。",
+  style:"2 歲小孩，只會哭、喊媽媽，講不出完整句子；大部分由媽媽回答。",
+  belief:"（媽媽）以為是癲癇或腦膜炎，很怕腦袋燒壞。",
+  clues:[
+    {id:"seizure",label:"在家全身抽搐",w:1,vol:true,who:"family",fact:"剛剛在家抽筋"},
+    {id:"short",label:"抽搐約兩分鐘自行停止",w:3,who:"family",fact:"大約兩分鐘就停了",when:"問到多久、幾分鐘、持續",kw:["多久","幾分鐘","時間","持續","停"],line:"大概……兩分鐘吧？感覺好久，可是應該兩分鐘左右就停了。",ask:"抽筋持續多久？"},
+    {id:"recovered",label:"發作後已清醒、會哭會動",w:3,who:"family",fact:"停下來後有哭、會找媽媽、手腳都會動",when:"問到現在、醒、精神、手腳",kw:["現在","醒","哭","精神","叫","動"],line:"現在有醒，會哭會找媽媽，手腳都會動。",ask:"現在精神怎麼樣？叫得醒嗎？"},
+    {id:"generalized",label:"全身對稱抽搐（非半邊）",w:2,who:"family",fact:"全身兩邊一起抖，不是只有半邊",when:"問到全身還是半邊、怎麼抖",kw:["全身","半邊","一邊","兩邊","怎麼抖","樣子"],line:"全身一起抖，兩邊都有。",ask:"是全身抖還是只有半邊？"},
+    {id:"fever",label:"發燒 39.5 度",w:1,who:"family",fact:"傍晚開始燒，量到 39.5 度",when:"問到發燒",kw:["發燒","燒","體溫"],line:"傍晚開始燒，量到 39.5 度。",ask:"有沒有發燒？"},
+    {id:"first",label:"第一次發作，父親幼時有類似",w:1,who:"family",fact:"第一次，爸爸小時候好像也有過",when:"問到以前、第一次、家族",kw:["以前","第一次","家族","類似"],line:"第一次……他爸爸小時候好像也有過。",ask:"以前有發生過嗎？"}],
+  vitals:{BP:"96/58",HR:148,RR:30,SpO2:97,T:39.4},
+  looks:["在媽媽懷裡大哭，臉紅紅的，手腳會揮動"], det:[],
+  family:{who:"媽媽",type:"焦慮施壓型",anx:85,persona:"非常害怕，講話很快一直哭，要求馬上看醫生；被同理後能清楚回答。爸爸在旁邊拿著健保卡發抖。",
+    lines:["他剛剛眼睛往上吊欸！你們快點！","會不會變癲癇？會不會腦袋燒壞？"]},
+  filler:["（小安）媽媽……媽媽……","（小安）哇——","（小安抱著媽媽啜泣）"] },
+
+{ id:"cold_f23", name:"林佳穎", age:23, sex:"女", arrive:0, mode:"自行走入", loud:false,
+  cc:"喉嚨有點痛……我明天要上班，可以開診斷證明給我嗎？", short:"喉嚨痛，想開診斷證明",
+  trueLevel:5, dx:"輕微上呼吸道感染", cat:"呼吸系統",
+  job:"超商大夜班店員",
+  story:"今天休假，白天喉嚨癢痛、有點鼻塞。晚上診所都關了，店長說請假要有診斷證明，所以跑來急診。",
+  style:"有點不好意思、一直滑手機，講話正常。",
+  belief:"覺得晚上只有急診開，應該很快。",
+  clues:[
+    {id:"sore",label:"喉嚨痛",w:1,vol:true,who:"patient",fact:"喉嚨痛"},
+    {id:"no_fever",label:"沒有發燒",w:2,who:"patient",fact:"沒有發燒，在家量 36.8",when:"問到發燒",kw:["發燒","燒","體溫"],line:"沒有發燒，在家量 36.8。",ask:"有沒有發燒？"},
+    {id:"breath_ok",label:"呼吸、吞嚥正常",w:2,who:"patient",fact:"不會喘，吞東西有點痛而已",when:"問到喘、呼吸、吞",kw:["喘","呼吸","吞","口水"],line:"不會喘，吞東西有點痛而已。",ask:"會不會喘？吞得下去嗎？"},
+    {id:"onset",label:"今天早上開始",w:1,who:"patient",fact:"今天早上開始",when:"問到多久、什麼時候",kw:["多久","什麼時候","開始"],line:"今天早上開始的。",ask:"什麼時候開始的？"},
+    {id:"healthy",label:"無病史、無過敏",w:1,who:"patient",fact:"沒有慢性病也沒有過敏",when:"問到病史、吃藥、過敏",kw:["病史","吃藥","過敏","慢性","藥"],line:"沒有什麼病，也沒有過敏。",ask:"有沒有病史或過敏？"},
+    {id:"reason",label:"為了請假證明而來",w:1,who:"patient",fact:"晚上診所關了，店長要診斷證明",when:"問到為什麼來急診",kw:["為什麼","急診","診所","證明","上班"],line:"晚上診所都關了，店長說請假要診斷證明……",ask:"今天怎麼會想來急診？"}],
+  vitals:{BP:"112/70",HR:82,RR:16,SpO2:99,T:37.1},
+  looks:["戴口罩在滑手機，精神不錯"], det:[],
+  family:null,
+  filler:["大概要等多久啊？","可以開診斷證明就好嗎？","不好意思，我知道我不是很嚴重……"] }
+];
+/* 既有案例的全名、職業與背景故事 */
+const EXTRA={
+  sprain_m20:{name:"張家豪",job:"大學籃球校隊",story:"晚上在河濱球場跟隊友打全場，搶籃板落地踩到對手的腳，右腳踝向內翻。隊友騎機車載他來。下週六有校際比賽，很怕不能上場。"},
+  ami_f64:{name:"林秀琴",job:"退休國小老師",story:"晚上和先生在夜市吃了鹽酥雞，九點多開始上腹悶、想吐，以為胃食道逆流又犯，吃了胃藥沒好。兒子在台北工作，不想讓他擔心。"},
+  fever_c8:{name:"王小芸",job:"小學二年級",story:"今天下午放學後開始發燒，晚餐還吃了半碗飯。爸爸在外地工作，媽媽一個人帶小孩，上次表哥高燒住院讓她很怕。"},
+  panic_m35:{name:"黃志明",job:"科技業工程師",story:"公司這季在裁員，連續好幾天加班到凌晨。今晚在家滑到同事被資遣的訊息後，突然胸痛、喘不過氣，自己叫計程車來。"},
+  cut_m55:{name:"劉國華",job:"自助餐店老闆",story:"收店後切明天要用的高麗菜，刀滑掉割到左手食指。太太幫他用衛生紙壓著，他急著回去備料。"},
+  sepsis_m78:{name:"王金水",job:"退休農夫",story:"住在女兒家附近，平常會自己騎腳踏車去公園下棋。攝護腺肥大長期放尿管，上週剛換管。今天下午開始講話亂、一直說要回老家。"},
+  ectopic_f28:{name:"陳怡君",job:"銀行行員",story:"和男友交往兩年，沒有固定避孕。最近月結很忙，以為月經晚來是壓力。下班後下腹突然劇痛，男友出差，她自己叫車來。"},
+  dissect_m50:{name:"李建宏",job:"貨運司機",story:"跑長途貨運，抽菸、高血壓多年但嫌麻煩不吃藥。今晚在家看電視時突然背痛像被撕開，太太堅持要來。"}
+};
+for(const c of CASES) Object.assign(c, EXTRA[c.id]||{});
+
+/* ============ 狀態 ============ */
+let S = null;          // 遊戲狀態
+let sample = null;     // Claude sample 函式；null = 離線
+let aiOfflineMsg = "目前為離線腳本模式：病人依關鍵字回答。在 claude.ai 開啟並登入時，可由 Claude 即時扮演。";
+let aiState = "pending";   // pending | ai | offline
+let tickTimer = null, lastReal = 0;
+
+function shuffle(a){ a=a.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+/* 每班從案例池抽 9 位：4 位一二級、2 位三級、3 位四五級，到院時間隨機 */
+function pickCases(){
+  const hi=shuffle(CASES.filter(c=>c.trueLevel<=2)), mid=shuffle(CASES.filter(c=>c.trueLevel===3)), lo=shuffle(CASES.filter(c=>c.trueLevel>=4));
+  const pick=[...lo.slice(0,1), ...shuffle([...hi.slice(0,4),...mid.slice(0,2),...lo.slice(1,3)])];
+  let t=0; return pick.map((c,i)=>({...c, arrive: i===0?0:(t+=2+Math.floor(Math.random()*4))}));
+}
+function newGame(){
+  S = {
+    t:0, running:false, speed:1, busy:false, ended:false,
+    cur:null, selLevel:null,
+    beds:{resus:[0,0], treat:[0,0,0,0]},
+    pts: pickCases().map(c=>({
+      c, arrived:false, status:"pending", revealed:new Set(), turns:0, log:[], called:false,
+      vitalsTaken:false, looked:false, anx:c.family?c.family.anx:(c.loud?55:30),
+      triage:null, seenAt:null, collapsed:false, collapsedAt:null, fillerI:0, famI:0
+    })),
+    events:[], barge:Math.random()<0.6, bargeDone:false, aiCalls:0
+  };
+}
+
+/* ============ 工具 ============ */
+const $ = id=>document.getElementById(id);
+function el(tag, attrs, ...kids){
+  const e=document.createElement(tag);
+  if(attrs) for(const [k,v] of Object.entries(attrs)){
+    if(v==null||v===false) continue;
+    if(k==="class") e.className=v; else if(k==="text") e.textContent=v;
+    else if(k.startsWith("on")) e.addEventListener(k.slice(2),v); else e.setAttribute(k,v===true?"":v);
+  }
+  for(const k of kids.flat()) if(k!=null&&k!==false) e.append(k.nodeType?k:String(k));
+  return e;
+}
+const pad=n=>String(n).padStart(2,"0");
+function clockStr(sec){ const m=Math.floor(sec/60)+START_H*60+START_M; return pad(Math.floor(m/60)%24)+":"+pad(m%60); }
+function mmss(sec){ sec=Math.max(0,Math.floor(sec)); return pad(Math.floor(sec/60))+":"+pad(sec%60); }
+const arriveSec = p=>p.c.arrive*60;
+function seenOrNow(p){ return p.seenAt!=null && p.seenAt<=S.t ? p.seenAt : S.t; }
+function stageOf(p){
+  if(p.collapsed) return 3;
+  const el_=(seenOrNow(p)-arriveSec(p))/60; let s=0;
+  for(const d of p.c.det){ if(!d.collapse && el_>=d.after) s=Math.max(s,d.stage); }
+  const col=p.c.det.find(d=>d.collapse);
+  if(col && el_>=col.after-5 && s>=1) s=2;
+  return s;
+}
+function lookText(p){ const L=p.c.looks; return L[Math.min(stageOf(p),L.length-1)]; }
+function vitalsOf(p){ return (stageOf(p)>=1 && p.c.vitals2)? p.c.vitals2 : p.c.vitals; }
+function famName(p){ return p.c.family? p.c.family.who : ""; }
+
+/* ============ 時間推進與事件 ============ */
+function advance(sec){
+  const target=S.t+sec;
+  // 逐步推進，確保倒下事件依序觸發
+  while(S.t<target && !S.ended){
+    S.t=Math.min(target, S.t+15);
+    for(const p of S.pts){
+      if(!p.arrived && S.t>=arriveSec(p)){ p.arrived=true; p.status="waiting"; }
+      if(p.status==="triaged" && p.seenAt!=null && S.t>=p.seenAt) p.status="seen";
+    }
+    for(const p of S.pts){
+      if(!p.arrived||p.collapsed) continue;
+      const col=p.c.det.find(d=>d.collapse); if(!col) continue;
+      const seen = p.seenAt!=null && p.seenAt<=S.t;
+      const collapseAt=arriveSec(p)+col.after*60;
+      if(!seen && S.t>=collapseAt && (p.seenAt==null || p.seenAt>collapseAt)){ triggerCollapse(p); return; }
+    }
+    if(S.t>=SHIFT_MIN*60){ endShift(); return; }
+  }
+  // 子彈時間：全部到齊且都已檢傷 → 交班
+  if(S.pts.every(p=>p.arrived && p.status!=="waiting" && p.status!=="interview")) { endShift(); return; }
+}
+function loop(){
+  const now=performance.now(); const dt=(now-lastReal)/1000; lastReal=now;
+  if(S && S.running && !S.busy && !S.ended && document.visibilityState==="visible"){
+    advance(dt*RATE*S.speed); checkEvents();
+  }
+  renderLive();
+}
+function startLoop(){ lastReal=performance.now(); clearInterval(tickTimer); tickTimer=setInterval(loop,250); }
+
+function takeBed(kind, from){
+  const arr=S.beds[kind]; let i=0;
+  for(let k=1;k<arr.length;k++) if(arr[k]<arr[i]) i=k;
+  const at=Math.max(from, arr[i]); arr[i]=at+BED_HOLD*60; return at;
+}
+function bedsFree(kind){ return S.beds[kind].filter(f=>f<=S.t).length; }
+
+function triggerCollapse(p){
+  p.collapsed=true; p.collapsedAt=S.t; p.status="seen"; screenFlash();
+  const wasCur = S.cur===p;
+  p.seenAt=S.t; takeBed("resus", S.t);
+  if(!p.triage) p.triage={level:null,cat:"",dest:"resus",at:S.t,forced:true};
+  else p.triage.forcedFrom=p.triage.level;
+  p.log.push({who:"sys",text:"⚠ "+clockStr(S.t)+" 候診區倒下，轉一級送急救區"});
+  if(wasCur) S.cur=null;
+  S.running=false;
+  const where = p.triage? "已檢傷、在候診區等候中" : "還沒完成檢傷";
+  showOverlay(el("div",{class:"sheet alarm",role:"alertdialog","aria-modal":"true"},
+    el("h1",{text:"候診區有人倒下"}),
+    el("p",{class:"lead",text:`${clockStr(S.t)}　${p.c.name}（${p.c.age}歲${p.c.sex}）在${p.triage&&p.triage.level?"候診區":"候診佇列"}失去意識。`}),
+    el("p",{text:`病患${where}。到診至今 ${Math.round((S.t-arriveSec(p))/60)} 分鐘。已強制轉為一級、推入急救區。這筆會列入交班報告。`}),
+    el("div",{},el("button",{class:"btn",onclick:()=>{hideOverlay();S.running=true;lastReal=performance.now();render();}},"回到檢傷台"))
+  ));
+  render();
+}
+
+/* ============ 叫號與問診 ============ */
+function callPatient(p){
+  if(S.busy||S.ended) return;
+  if(S.cur && S.cur!==p && S.cur.status==="interview") S.cur.status="waiting";
+  S.cur=p; p.status="interview"; S.selLevel=null;
+  $("toast").textContent="";
+  if(!p.called){
+    p.called=true;
+    const fam=p.c.family;
+    const ccFromFam=p.c.cc.startsWith("（");
+    const text=p.c.cc.replace(/^（.+?）/,"");
+    p.log.push({who:"sys",text:clockStr(S.t)+" 叫號："+p.c.name});
+    p.log.push({who:"nurse",text:"你好，我是檢傷護理師。今天怎麼了？"});
+    p.log.push({who:ccFromFam?"family":"patient",text});
+    if(fam && !ccFromFam && fam.type==="焦慮施壓型") p.log.push({who:"family",text:fam.lines[0]});
+    for(const cl of p.c.clues) if(cl.vol) p.revealed.add(cl.id);
+  }
+  if(p.attitude && !p.attSaid && ATT_OPEN[p.attitude]){ p.attSaid=true; p.log.push({who:p.c.family?"family":"patient",text:ATT_OPEN[p.attitude]}); }
+  render(); setTimeout(()=>$("askInput").focus(),0);
+}
+
+/* 離線模式：同義詞展開，讓不同問法也能對到線索 */
+const SYN=[[/流汗|出汗|盜汗|濕/,"冷汗 汗"],[/疾病史|過去病史|以前生過|生過什麼病|慢性病|有什麼病|身體狀況|健康/,"病史 慢性"],[/藥物|用藥|吃什麼藥|服藥/,"吃藥 藥"],
+  [/頭昏|頭重|天旋地轉|暈眩/,"頭暈 暈"],[/呼吸困難|吸不到氣|喘不過氣|氣喘|呼吸/,"喘 呼吸"],[/幾點|何時|多長|多少時間|持續|從什麼時候|發生多久/,"多久 什麼時候 開始"],
+  [/怎樣的痛|什麼痛|痛法|哪一種|描述|形容一下|什麼感覺|感覺如何/,"感覺 形容 怎麼痛"],[/噁心|想吐|嘔/,"吐 噁心"],[/跌倒|摔倒|撞到|碰到|摔/,"跌 撞 受傷"],
+  [/月事|大姨媽|經痛|經期/,"月經 生理期"],[/喝了酒|飲酒|喝酒|酒精/,"酒 喝酒"],[/家人|旁邊的人|陪你來|陪同/,"家人 你覺得"],
+  [/放射|延伸|轉移|其他地方|別的地方|其他部位|哪裡還/,"其他地方 延伸 跑 還有"],[/突然|一下子|慢慢/,"突然 開始"],[/心跳|心悸/,"心悸 心跳"],[/走路|站起來|起身/,"走 站"]];
+function expandQ(q){ let x=q; for(const [re,add] of SYN) if(re.test(q)) x+=" "+add; return x; }
+const EMPATHY_REPLY=["……謝謝你。","好，我知道了，謝謝。","嗯……聽你這樣說比較安心一點。","謝謝，不好意思麻煩你們。"];
+function offlineReply(p,q0){
+  const q=expandQ(q0);
+  const out={patient:"",family:"",revealed:[]};
+  const hits=p.c.clues.filter(cl=>!cl.vol && !p.revealed.has(cl.id) && cl.kw && cl.kw.some(k=>q.includes(k)) && !(cl.volTurn));
+  const again=p.c.clues.filter(cl=>p.revealed.has(cl.id) && cl.kw && cl.kw.some(k=>q.includes(k)));
+  const pLines=[], fLines=[];
+  for(const cl of hits.slice(0,2)){ (cl.who==="family"?fLines:pLines).push(cl.line); out.revealed.push(cl.id); }
+  if(!hits.length && again.length){ const cl=again[0]; (cl.who==="family"?fLines:pLines).push("剛剛說過了啊，"+cl.line); }
+  const kind=/辛苦|了解|理解|擔心|抱歉|不好意思|放心|我知道|別怕|不要怕|會幫|馬上/.test(q0);
+  if(!pLines.length && !fLines.length){
+    if(q0.trim().length<2) pLines.push("嗯？你說什麼？");
+    else if(kind) pLines.push(EMPATHY_REPLY[Math.floor(Math.random()*EMPATHY_REPLY.length)]);
+    else if(/幾分|分數|0到10|1到10|多痛|痛不痛/.test(q0)) pLines.push(p.c.loud?"十分！很痛啦！":"……大概五、六分吧，還忍得住。");
+    else { const f=p.c.filler; let i=Math.floor(Math.random()*f.length); if(f.length>1&&i===p.lastFill) i=(i+1)%f.length; p.lastFill=i; pLines.push(f[i]); }
+  }
+  // 家屬「應該被相信」主動插話
+  const vt=p.attitude==="scold"? null : p.c.clues.find(cl=>cl.volTurn && !p.revealed.has(cl.id) && p.turns+1>=cl.volTurn);
+  if(vt){ fLines.push(vt.line); out.revealed.push(vt.id); }
+  // 焦慮與施壓
+  const fam=p.c.family;
+  if(/辛苦|了解|理解|擔心|抱歉|不好意思|放心|我知道|別怕|不要怕|會幫|馬上/.test(q)) p.anx=Math.max(0,p.anx-18); else p.anx=Math.min(100,p.anx+4);
+  if(fam && !fLines.length && fam.type==="焦慮施壓型" && p.anx>50 && Math.random()<.5) fLines.push(fam.lines[p.famI++%fam.lines.length]);
+  if(fam && !fLines.length && /家屬|先生|太太|媽媽|女兒|同學|你們|妳覺得|你覺得/.test(q)) fLines.push(fam.lines[p.famI++%fam.lines.length]);
+  out.patient=pLines.join(" "); out.family=fLines.join(" ");
+  // 由家屬代訴的病患本人（意識不清）
+  if(p.c.id==="sepsis_m78" && !out.patient) out.patient=p.c.filler[p.fillerI++%p.c.filler.length].replace(/^（.+?）/,"");
+  out.cost=COST.ask; out.anxiety=p.anx;
+  return out;
+}
+
+function buildPrompt(p,q){
+  const c=p.c, fam=c.family;
+  const clueLines=c.clues.map(cl=>{
+    const who=cl.who==="family"?("家屬（"+fam.who+"）"):"病患";
+    const when=cl.vol?"一開始就主動說":(cl.volTurn&&p.attitude!=="scold"?`第 ${cl.volTurn} 回合起由家屬主動插話說出`:"只有當護理師問到："+cl.when);
+    return `- id: ${cl.id}｜事實：${cl.fact}｜由誰說：${who}｜何時說：${when}`;
+  }).join("\n");
+  const hist=p.log.filter(m=>m.who!=="sys").slice(-16).map(m=>(m.who==="nurse"?"護理師":m.who==="family"?("家屬（"+(fam?fam.who:"")+"）"):"病患")+"："+m.text).join("\n");
+  const waited=Math.round((S.t-arriveSec(p))/60);
+  return `你在一個急診檢傷「訓練遊戲」裡扮演病患${fam?"與陪同家屬":""}。玩家扮演檢傷護理師，正在問診。
+
+【病患】${c.name}，${c.age} 歲${c.sex}性，${c.mode}到診，已等候約 ${waited} 分鐘。
+${c.job?`職業：${c.job}
+`:""}${c.story?`背景（角色自己的經歷，可讓回答更具體，但線索仍照揭露規則）：${c.story}
+`:""}說話風格：${c.style}
+病患自己的想法：${c.belief}
+目前外觀：${lookText(p)}
+${fam?`【家屬】${fam.who}，類型：${fam.type}。${fam.persona} 目前焦慮度 ${p.anx}/100。`:"【家屬】無，病患獨自前來。"}
+${p.attitude&&ATT_PROMPT[p.attitude]?`【剛才在候診區發生的事】${ATT_PROMPT[p.attitude]}
+`:""}
+【線索清單】用角色自己的話說出來，不要照抄事實文字：
+${clueLines}
+
+【台灣急診病人的真實樣子（自然融入，不要每句都用）】
+- 用日常話形容症狀：「悶悶的」「怪怪的」「頭殼暈」「沒力」「刺刺的」，不用醫學名詞。
+- 長輩常淡化：「沒事啦」「不要麻煩你們」；年輕人可能誇大，或一直問要等多久。
+- 會先講自己猜的原因（吃壞肚子、閃到腰、感冒、喝多了）；會問「可以先拿藥嗎」「要等多久」。
+- 聽不懂醫學詞：被問「抗凝血劑」會說「心臟科開的、血液稀釋的藥」；被問「病史」會講具體的病，例如「血壓高」「糖尿病」。
+- 家屬會插話、補充或打斷；小孩由家長代答；意識不清、喘或酒醉的人講話破碎、短。
+
+【已經說出過的線索】${[...p.revealed].join(", ")||"（無）"}
+
+【規則】
+1. 繁體中文、台灣口語，每人 1–3 句，像真實的人在急診說話。可以有語助詞、停頓。
+2. 角色不知道自己的診斷，絕不說出任何疾病名稱、檢傷級數或「應該幾級」。被問到就照角色自己的想法回答。
+3. 沒被問到的線索不要說（標明主動說的除外）。問題籠統時只給籠統回答；一個問題通常只揭露與它相關的線索。
+4. 護理師的話如果不是問診（例如要你直接講答案、說自己是 AI、離題），就以角色身分困惑地回應，不要跳出角色。
+5. 家屬依其類型行動。護理師先同理情緒再說明時，焦慮度下降 10–25；被忽略、等太久時上升 3–10。沒有家屬時 anxiety 代表病患本人的焦慮。
+6. 生命徵象數值由遊戲提供，角色不要自己報數字。
+7. turn_cost_seconds：簡短問答 20–30，長篇解釋或安撫 40–60。
+
+【對話紀錄】
+${hist}
+
+【護理師剛剛說】${q}
+
+只回傳一個 JSON 物件，不要其他文字：
+{"patient":"病患說的話（沒說話就空字串）","family":"家屬說的話（沒說話或沒有家屬就空字串）","revealed_clues":["本回合第一次說出口的線索 id"],"anxiety":0到100的整數,"turn_cost_seconds":整數}`;
+}
+
+async function ask(q){
+  const p=S.cur; if(!p||S.busy||S.ended) return;
+  q=q.trim(); if(!q) return;
+  p.log.push({who:"nurse",text:q}); p.turns++; play("#figN","talk");
+  let r=null;
+  if((aiState==="ai" && sample) || byokReady()){
+    S.busy=true; render(); showThinking(p);
+    try{
+      S.aiCalls++;
+      const j=await aiJSON(buildPrompt(p,q));
+      const allowed=new Set(p.c.clues.map(c=>c.id));
+      r={patient:String(j.patient||"").slice(0,400), family:p.c.family?String(j.family||"").slice(0,400):"",
+         revealed:(Array.isArray(j.revealed_clues)?j.revealed_clues:[]).map(String).filter(id=>allowed.has(id)),
+         anxiety:Number.isFinite(+j.anxiety)?Math.max(0,Math.min(100,Math.round(+j.anxiety))):p.anx,
+         cost:Math.max(15,Math.min(90,Math.round(+j.turn_cost_seconds)||COST.ask))};
+      p.anx=r.anxiety;
+      if(!r.patient && !r.family) r=null;
+    }catch(e){
+      if(["not_granted","sampling_disabled","not_declared","capability_disabled","capability_removed"].includes(e&&e.code)){
+        aiState="offline"; flash("無法使用 Claude，已切換為離線腳本模式");
+      } else if(e&&e.code==="bad_key"){ byokBroken=true; flash("API key 無效，先改用離線模式（可到「AI 設定」更新）"); refreshAINote(); }
+      else if(e&&e.code==="rate_limited"){ flash("AI 呼叫太頻繁或額度用完，這一回合改用離線腳本"); }
+      else if(e&&!sample){ flash("AI 沒有回應（"+errText(e)+"），這一回合改用離線腳本"); }
+      r=null;
+    }finally{ S.busy=false; lastReal=performance.now(); }
+  }
+  if(!r) r=offlineReply(p,q);
+  for(const id of r.revealed){ p.revealed.add(id); p.log.at(-1).hit=true; }
+  if(r.patient) p.log.push({who:"patient",text:r.patient});
+  if(r.family) p.log.push({who:"family",text:r.family});
+  animReply(r,p);
+  render(); advance(r.cost);
+  render();
+}
+function showThinking(p){
+  const chat=$("chat"); chat.append(el("div",{class:"msg patient thinking"},el("span",{class:"from",text:p.c.name}),"……"));
+  chat.scrollTop=chat.scrollHeight;
+}
+
+function takeVitals(){
+  const p=S.cur; if(!p||S.busy) return;
+  const v=vitalsOf(p); p.vitalsTaken=v; animVitals(v,true);
+  p.log.push({who:"sys",text:`量生命徵象：BP ${v.BP}｜HR ${v.HR}｜RR ${v.RR}｜SpO₂ ${v.SpO2}%｜T ${v.T}°C`});
+  advance(COST.vitals); render();
+}
+function look(){
+  const p=S.cur; if(!p||S.busy) return; p.looked=true; play("#figN","lean");
+  p.log.push({who:"sys",text:"外觀："+lookText(p)});
+  advance(COST.look); render();
+}
+
+function submitTriage(ev){
+  ev.preventDefault();
+  const p=S.cur; if(!p||!S.selLevel||S.busy) return;
+  const lv=S.selLevel, dest=lv===1?"resus":lv===2?"treat":"wait";
+  advance(COST.submit); if(S.ended||p.collapsed) { render(); return; }
+  let seen;
+  if(dest==="resus") seen=takeBed("resus",S.t);
+  else if(dest==="treat") seen=takeBed("treat",S.t+5*60);
+  else seen=S.t+ALLOWED[lv]*60;
+  p.triage={level:lv,dest,at:S.t}; p.seenAt=seen; p.status= seen<=S.t?"seen":"triaged";
+  p.log.push({who:"sys",text:`${clockStr(S.t)} 完成檢傷`});
+  animSubmit(p,lv);
+  S.cur=null; S.selLevel=null;
+  flash("已完成檢傷："+p.c.name);
+  render(); advance(0); render();
+}
+
+/* ============ 交班結算 ============ */
+function endShift(){
+  if(S.ended) return; S.ended=true; S.running=false; clearInterval(tickTimer);
+  // 交班後推算：仍在候診區的病患，是否會在被看到之前倒下
+  for(const p of S.pts){
+    if(!p.arrived||p.collapsed) continue;
+    const col=p.c.det.find(d=>d.collapse); if(!col) continue;
+    const at=arriveSec(p)+col.after*60;
+    if(p.triage && p.seenAt>at){ p.collapsed=true; p.collapsedAt=at; p.afterShift=true; }
+  }
+  render(); showResults();
+}
+const PTS={"0":100,"-1":70,"-2":40,"1":20,"2":0};
+function scoreOf(){
+  let total=0, collapses=0; const arrived=S.pts.filter(p=>p.arrived), max=arrived.length*100;
+  for(const p of arrived){
+    const tl=p.c.trueLevel;
+    const playerLv = p.triage && !p.triage.forced ? (p.triage.forcedFrom ?? p.triage.level) : null;
+    p.playerLv=playerLv; p.items=[];
+    if(playerLv==null){ p.d=null; p.items.push(["沒有完成檢傷",0]); }
+    else{ const d=playerLv-tl; p.d=d; const k=String(Math.max(-2,Math.min(2,d)));
+      p.items.push([d===0?"分級正確":d<0?`高估 ${-d} 級`:`低估 ${d} 級`, PTS[k]]); }
+    const end = p.collapsed? p.collapsedAt : (p.seenAt!=null? p.seenAt : S.t);
+    p.waitMin=(end-arriveSec(p))/60;
+    if(p.waitMin>ALLOWED[tl]+3) p.items.push(["超過建議看診時間",-10]);
+    if(p.collapsed){ collapses++; p.items.push(["倒下",-50]); }
+    p.pts=p.items.reduce((a,x)=>a+x[1],0); total+=p.pts;
+  }
+  const pct=max? total/max : 0;
+  let gi = pct>=0.9?0: pct>=0.75?1: pct>=0.55?2: pct>=0.35?3:4;
+  if(collapses) gi=Math.min(4,gi+1);
+  const fam=arrived.filter(p=>p.c.family && p.called);
+  return {total,max,grade:"SABCD"[gi],collapses,famAvg:fam.length?Math.round(fam.reduce((a,p)=>a+p.anx,0)/fam.length):null};
+}
+function fmtD(x){ if(Math.abs(x)<0.05) return "平均誤差 0"; return (x>0?"平均低估 ":"平均高估 ")+Math.abs(x).toFixed(1)+" 級"; }
+function biasSlices(){
+  const tri=S.pts.filter(p=>p.d!=null);
+  const dims=[
+    {name:"表達方式",groups:[["大聲／激動",p=>p.c.loud],["安靜／隱忍",p=>!p.c.loud]],adj:["大聲的","安靜的"]},
+    {name:"年齡",groups:[["40 歲以下",p=>p.c.age<40],["40–64 歲",p=>p.c.age>=40&&p.c.age<65],["65 歲以上",p=>p.c.age>=65]]},
+    {name:"性別",groups:[["男性",p=>p.c.sex==="男"],["女性",p=>p.c.sex==="女"]],adj:["男性","女性"]},
+    {name:"家屬在場",groups:[["有家屬",p=>!!p.c.family],["獨自前來",p=>!p.c.family]],adj:["有家屬陪同的","獨自前來的"]}
+  ];
+  for(const d of dims){
+    d.res=d.groups.map(([label,f])=>{const g=tri.filter(f); return {label,n:g.length,mean:g.length?g.reduce((a,p)=>a+p.d,0)/g.length:null};});
+    const v=d.res.filter(r=>r.n); d.spread=v.length>=2? Math.max(...v.map(r=>r.mean))-Math.min(...v.map(r=>r.mean)) : 0;
+  }
+  return dims;
+}
+/* 回饋：送到作者的 Google Apps Script（網頁應用程式網址，結尾是 /exec）
+   在 claude.ai 裡平台會擋掉背景傳送，所以改用新分頁開啟同一個網址（打開時就已存好）；
+   用 HTML 檔或其他網站打開時，直接在背景送出。 */
+const FEEDBACK_URL="";
+/* ============ 自備 API key（GitHub 或 HTML 檔版本才有；claude.ai 裡由 Claude 扮演） ============ */
+const BYOK_STORE="np_ai";
+const PROVIDERS={gemini:{name:"Gemini",model:"gemini-2.5-flash"},claude:{name:"Claude",model:"claude-opus-5-5"}};
+let byok=null, byokBroken=false;
+try{ byok=JSON.parse(localStorage.getItem(BYOK_STORE)||"null"); }catch(_){ byok=null; }
+function byokReady(){ return !window.claude && !byokBroken && !!(byok && byok.key && PROVIDERS[byok.provider]); }
+function parseLooseJSON(t){
+  try{ return JSON.parse(t); }catch(_){}
+  const m=String(t).match(/```(?:json)?\s*([\s\S]*?)```/); if(m){ try{ return JSON.parse(m[1]); }catch(_){} }
+  const a=t.indexOf("{"), b=t.lastIndexOf("}"); if(a>=0&&b>a){ try{ return JSON.parse(t.slice(a,b+1)); }catch(_){} }
+  throw {code:"invalid_json",message:"回應格式不對"};
+}
+function httpErr(st,m){ if(st===400&&/api.?key/i.test(m||"")) st=401; return {code: st===401||st===403?"bad_key": st===429?"rate_limited": (st===400||st===404)?"bad_request":"upstream_error", message:m||("HTTP "+st)}; }
+function errText(e){
+  const c=e&&e.code;
+  if(c==="bad_key") return "API key 無效或沒有權限";
+  if(c==="rate_limited") return "超過額度或呼叫太頻繁，稍後再試";
+  if(c==="bad_request") return "請求有誤（模型名稱可能不對）："+(e.message||"");
+  if(c==="refused") return "模型拒絕回答這一題";
+  return (e&&e.message)||"連線失敗，請確認網路";
+}
+async function byokCall(prompt,cfg){
+  cfg=cfg||byok;
+  if(cfg.provider==="gemini"){
+    const model=cfg.model||PROVIDERS.gemini.model;
+    const r=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(cfg.key)}`,{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json"}})});
+    const j=await r.json().catch(()=>({}));
+    if(!r.ok) throw httpErr(r.status, j.error&&j.error.message);
+    const parts=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[];
+    const t=parts.map(x=>x.text||"").join("");
+    if(!t) throw {code:"empty_completion",message:"沒有回應"};
+    return t;
+  }
+  /* Claude Messages API：瀏覽器直連需要 anthropic-dangerous-direct-browser-access；
+     預設 Claude Opus 5.5（effort low 讓回答快一點），並開啟伺服器端的拒答備援 */
+  const r=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{
+      "content-type":"application/json","x-api-key":cfg.key,"anthropic-version":"2026-10-21",
+      "anthropic-beta":"server-side-fallback-2026-07-01","anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:cfg.model||PROVIDERS.claude.model,max_tokens:16000,output_config:{effort:"low"},fallbacks:"default",
+      messages:[{role:"user",content:prompt}]})});
+  const j=await r.json().catch(()=>({}));
+  if(!r.ok) throw httpErr(r.status, j.error&&j.error.message);
+  if(j.stop_reason==="refusal") throw {code:"refused"};
+  const t=(j.content||[]).filter(b=>b.type==="text").map(b=>b.text).join("");
+  if(!t) throw {code:"empty_completion",message:"沒有回應"};
+  return t;
+}
+async function aiJSON(prompt){
+  if(sample) return await sample.json(prompt,{modelTier:"quick",cache:false});
+  return parseLooseJSON(await byokCall(prompt));
+}
+function aiNoteText(){
+  if(aiState==="ai") return "病人與家屬由 Claude 即時扮演，第一次問診時會請你允許使用 Claude。";
+  if(aiState==="pending") return "正在確認能否由 AI 扮演病人……";
+  if(byokReady()) return `病人與家屬由 ${PROVIDERS[byok.provider].name} 即時扮演（使用你在「AI 設定」填的 key）。`;
+  if(!window.claude) return "目前為離線模式：病人依關鍵字回答。想讓 AI 扮演病人，可以按「AI 設定」填入自己的 API key（Gemini 有免費額度；遊戲中也能從右上角打開）。";
+  return aiOfflineMsg;
+}
+function refreshAINote(){ const n=$("aiNote"); if(n) n.textContent=aiNoteText(); renderLive(); }
+function showAISettings(){
+  const cur=byok||{provider:"gemini",key:"",model:""};
+  openPop(close=>{
+    const prov=el("select",{id:"aiProv"},el("option",{value:"gemini"},"Gemini（Google，有免費額度）"),el("option",{value:"claude"},"Claude（Anthropic，依用量付費）"));
+    prov.value=cur.provider;
+    const key=el("input",{id:"aiKey",type:"password",autocomplete:"off",spellcheck:"false",placeholder:"貼上你的 API key"}); key.value=cur.key||"";
+    const model=el("input",{id:"aiModel",autocomplete:"off",spellcheck:"false"}); model.value=cur.model||"";
+    const hint=el("p",{class:"note"}), res=el("p",{class:"note",role:"status"});
+    const updHint=()=>{ const g=prov.value==="gemini"; model.placeholder="不填就用預設："+PROVIDERS[prov.value].model;
+      hint.replaceChildren(...(g? ["到 ",el("a",{href:"https://aistudio.google.com/apikey",target:"_blank",rel:"noopener"},"Google AI Studio")," 用 Google 帳號免費申請，不用綁信用卡；沒有綁付款方式就不會被收費。"]
+        : ["到 ",el("a",{href:"https://console.anthropic.com/settings/keys",target:"_blank",rel:"noopener"},"Anthropic Console")," 建立 key，會依用量收費。建議另開一把專用的 key 並設定花費上限；想省錢可以在下面填 claude-haiku-5-5。"])); };
+    prov.addEventListener("change",updHint); updHint();
+    const cfg=()=>({provider:prov.value,key:key.value.trim(),model:model.value.trim()});
+    const test=el("button",{class:"btn ghost",type:"button",onclick:async()=>{ const c=cfg(); if(!c.key){ res.textContent="請先貼上 key。"; return; }
+      res.textContent="測試中…"; try{ parseLooseJSON(await byokCall('只回傳這個 JSON，不要其他文字：{"ok":true}',c)); res.textContent="可以用！按「儲存」之後，病人就會由 AI 扮演。"; }
+      catch(e){ res.textContent="測試失敗："+errText(e); } }},"測試");
+    const save=el("button",{class:"btn",type:"button",onclick:()=>{ const c=cfg(); if(!c.key){ res.textContent="請先貼上 key。"; return; }
+      byok=c; byokBroken=false; try{ localStorage.setItem(BYOK_STORE,JSON.stringify(c)); }catch(_){} close(); refreshAINote(); flash("已儲存 AI 設定"); }},"儲存");
+    const clear=el("button",{class:"btn ghost",type:"button",onclick:()=>{ byok=null; byokBroken=false; try{ localStorage.removeItem(BYOK_STORE); }catch(_){} close(); refreshAINote(); flash("已清除 key"); }},"清除 key");
+    return el("div",{class:"popcard"},el("h3",{text:"AI 設定"}),
+      el("p",{text:"填入你自己的 API key，病人就會由 AI 即時扮演，費用或額度算在你自己的帳號。不填也能玩（離線模式）。"}),
+      el("label",{class:"aif"},"服務",prov), hint, el("label",{class:"aif"},"API key",key), el("label",{class:"aif"},"模型（選填）",model),
+      el("p",{class:"note",text:"key 只存在這台裝置的瀏覽器裡，遊戲直接連到 Google 或 Anthropic，不會傳給作者。在公用電腦玩完請按「清除 key」。"}),
+      el("div",{class:"btnrow"},test,save,clear,el("button",{class:"btn ghost",type:"button",onclick:close},"關閉")), res);
+  });
+}
+
+function feedbackBlock(sc,ttl){
+  const ok=/^https:\/\/script\.google\.com\/macros\/s\/[\w-]+\/exec$/.test(FEEDBACK_URL);
+  const inClaude=!!window.claude;
+  const ta=el("textarea",{id:"fbText",rows:"4",maxlength:"1000",placeholder:"好玩嗎？哪裡卡住、哪裡看不懂、想加什麼？都可以寫。"});
+  const nick=el("input",{id:"fbNick",maxlength:"40",placeholder:"暱稱（選填）"});
+  const msg=el("p",{class:"note",text: ok? "按下送出就會存到作者那邊。" : "回饋功能還沒設定好，之後就能使用。"});
+  const data=()=>({text:ta.value.trim(),nick:nick.value.trim(),grade:sc.grade,score:`${sc.total}/${sc.max}`,title:ttl[0],src:inClaude?"claude.ai":(location.host||"HTML 檔")});
+  let sent=false, btn;
+  const lock=t=>{ sent=true; ta.disabled=nick.disabled=true; btn.setAttribute("aria-disabled","true"); if(btn.tagName==="BUTTON") btn.disabled=true; btn.textContent="已送出"; msg.textContent=t; };
+  if(inClaude){
+    btn=el("a",{class:"btn",target:"_blank",rel:"noopener",href:"#","aria-disabled":"true"},"送出回饋");
+    btn.addEventListener("click",e=>{ if(sent||!ok||!ta.value.trim()){ e.preventDefault(); if(!sent) ta.focus(); return; } setTimeout(()=>lock("已在新分頁送出，看到「已收到」就完成了。謝謝你！"),50); });
+  } else {
+    btn=el("button",{class:"btn",type:"button",disabled:true},"送出回饋");
+    btn.addEventListener("click",async()=>{
+      if(sent||!ok||!ta.value.trim()) return; btn.disabled=true; btn.textContent="送出中…";
+      try{ await fetch(FEEDBACK_URL,{method:"POST",mode:"no-cors",body:new URLSearchParams(data())}); lock("已送出，謝謝你！"); }
+      catch(_){ btn.disabled=false; btn.textContent="送出回饋"; msg.textContent="送出失敗，請確認有連上網路再試一次。"; }
+    });
+  }
+  const upd=()=>{ if(sent) return; const can=ok&&!!ta.value.trim();
+    if(btn.tagName==="BUTTON") btn.disabled=!can; else { if(can){ btn.removeAttribute("aria-disabled"); btn.href=FEEDBACK_URL+"?"+new URLSearchParams(data()); } else btn.setAttribute("aria-disabled","true"); } };
+  ta.addEventListener("input",upd); nick.addEventListener("input",upd); upd();
+  return el("div",{class:"rule fb"},el("b",{text:"想對作者說什麼？"}),ta,nick,el("div",{},btn),msg);
+}
+function titleOf(sc,dims){
+  const arr=S.pts.filter(p=>p.arrived), tri=arr.filter(p=>p.d!=null);
+  const under=tri.filter(p=>p.d>0).length, over=tri.filter(p=>p.d<0).length, exact=tri.filter(p=>p.d===0).length;
+  const untri=arr.length-tri.length, slow=arr.filter(p=>(p.items||[]).some(x=>x[0].startsWith("超過"))).length;
+  const g=k=>dims.find(d=>d.name===k), m=(d,i)=>d&&d.res[i]&&d.res[i].n? d.res[i].mean : null;
+  const loud=g("表達方式"), age=g("年齡"), sex=g("性別");
+  if(sc.collapses) return ["候診區的惡夢",`有 ${sc.collapses} 位病人在你的班上倒下。下一班，記得每隔一陣子抬頭看看候診區。`];
+  if(untri>=3) return ["提早下班的人",`還有 ${untri} 位病人沒被叫到號，你就交班了。`];
+  if(tri.length>=3 && exact/tri.length>=0.8 && !under) return ["鷹眼檢傷師","大聲的、安靜的、一直說沒事的，你都看穿了。"];
+  if(m(loud,1)!=null && m(loud,0)!=null && m(loud,1)-m(loud,0)>=0.5 && m(loud,1)>0) return ["被音量牽著走的耳朵","喊得大聲的人很難被你忽略，安靜忍耐的人卻容易被你漏掉。"];
+  if(m(age,2)!=null && m(age,2)>=0.5) return ["「沒事啦」的信徒","長輩說沒事，你就信了。他們往往最會忍。"];
+  if(m(sex,1)!=null && m(sex,1)-(m(sex,0)??0)>=0.5) return ["把她的痛當成胃痛","女性的症狀常常不典型，你這班對她們判得比較輕。"];
+  if(under>=2) return ["樂觀主義者","你常把病人想得比實際輕。拿不準時，往重的那邊判。"];
+  if(!under && over>=Math.max(2,tri.length/2)) return ["寧可錯殺的守門人","你判得偏重，床位很快就滿了，但沒有人在你手上被漏掉。"];
+  if(slow>=3) return ["慢工出細活","你問得很仔細，只是外面排隊的人等得有點久。"];
+  return ["穩紮穩打的新手","大致抓得到輕重，再多值幾班會更準。"];
+}
+function verdict(dims){
+  const cand=dims.filter(d=>d.adj && d.res.every(r=>r.n)).sort((a,b)=>b.spread-a.spread)[0];
+  if(!cand || cand.spread<0.3) return "這個班次裡，你的判斷在不同類型病患之間沒有明顯落差。";
+  const [a,b]=cand.res, [an,bn]=cand.adj;
+  const part=(n,m)=> Math.abs(m)<0.05? `對${n}病患平均誤差 0` : `對${n}病患平均${m>0?"低估":"高估"} ${Math.abs(m).toFixed(1)} 級`;
+  return `你${part(an,a.mean)}，${part(bn,b.mean)}。`;
+}
+
+function showResults(){
+  const sc=scoreOf(), dims=biasSlices(), ttl=titleOf(sc,dims);
+  const byPt=S.pts.filter(p=>p.arrived);
+  const under=byPt.filter(p=>p.d==null || p.d>0 || p.collapsed);
+  const ptRows=byPt.map(p=>{
+    const out=p.collapsed?(p.afterShift?"交班後倒下":"候診區倒下"):(p.seenAt!=null?`${Math.round(p.waitMin)} 分鐘後醫師接手`:"還在排隊");
+    return el("tr",{},
+      el("td",{},p.c.name+"　",el("span",{class:"note",text:`${p.c.age}${p.c.sex}`})),
+      el("td",{},p.c.dx),
+      el("td",{},el("span",{class:"chip c"+p.c.trueLevel,text:p.c.trueLevel})),
+      el("td",{},p.playerLv?el("span",{class:"chip c"+p.playerLv,text:p.playerLv}):el("span",{class:"note",text:"—"})),
+      el("td",{class:p.collapsed?"neg":"",text:out}),
+      el("td",{text:p.items.map(x=>x[0]).join("、")}),
+      el("td",{class:"num "+(p.pts<50?"neg":"pos"),text:p.pts}));
+  });
+  const underEls=under.length? under.map(p=>{
+    const keys=p.c.clues.filter(cl=>!cl.vol && cl.w>=2);
+    const missed=keys.filter(cl=>!p.revealed.has(cl.id)), got=keys.filter(cl=>p.revealed.has(cl.id));
+    const ratio=keys.length? got.reduce((a,c)=>a+c.w,0)/keys.reduce((a,c)=>a+c.w,0):1;
+    const kind= p.d==null? "沒有完成檢傷" : ratio>=0.6? "關鍵線索問到了，但級數沒有反映出來" : "關鍵線索沒有問到";
+    const title=`${p.c.name}｜真實 ${p.c.trueLevel} 級，你給 ${p.playerLv??"—"} 級${p.d>0?`（低估 ${p.d} 級）`:""}｜${kind}`;
+    const turning=missed.slice().sort((a,b)=>b.w-a.w)[0];
+    return el("details",{},el("summary",{text:title}),
+      el("div",{class:"tr"},
+        el("div",{},el("button",{class:"term","data-term":"reveal",type:"button",text:"揭露率"})," ",el("span",{class:"mono",text:Math.round(ratio*100)+"%"})),
+        missed.length? el("div",{},el("b",{text:"漏掉的關鍵線索："}),missed.map(c=>c.label).join("、")):null,
+        turning? el("div",{class:"turn hit"},"轉折點：再問一句「"+turning.ask+"」就會知道「"+turning.label+"」。"):null,
+        got.length? el("div",{},el("b",{text:"有問到："}),got.map(c=>c.label).join("、")):null,
+        el("div",{class:"note",text:"當時的對話："}),
+        p.log.length? p.log.map(m=>el("div",{class:"turn"+(m.hit?" hit":""),text:(m.who==="nurse"?"你":m.who==="family"?famName(p):m.who==="sys"?"·":p.c.name)+"："+m.text})) : el("div",{class:"turn",text:"（沒有被叫號）"})
+      ));
+  }) : [el("p",{text:"沒有被低估或延誤的病人。"})];
+  const biasEls=dims.map(d=>el("div",{class:"grp"},el("b",{text:d.name}),
+    d.res.map(r=>el("div",{class:"row"},el("span",{text:`${r.label}（${r.n}）`}),el("span",{class:"mono "+(r.mean>0.05?"neg":""),text:r.n?fmtD(r.mean).replace("平均",""):"—"})))));
+  const EVTXT={ignore:"你沒理他。候診區的聲音有時是噪音，有時是警訊。",
+    scold:"你喝斥了他。秩序要顧，但被兇過的人後來比較不配合，原本會主動說的事也藏起來了。",
+    observe:"你先過去看了一眼。這就是「重新評估」：候診中的病人會變，看一眼常能早一步發現惡化。",
+    explain:"你先同理再說明看診順序。家屬的焦急是真的，但順序依嚴重程度，不依音量。",
+    letin:"你讓他插隊了。如果他其實不嚴重，就等於讓更危急的人多等一輪。",
+    guard:"你請保全協助。安全優先沒有錯，但少了一句同理，對方會覺得被當成鬧事的人。"};
+  const evs=S.events.filter(e=>e.kind==="barge"||e.kind==="shout");
+  const evEls=evs.length? evs.map(e=>{
+    const p=S.pts.find(x=>x.c.id===e.pid);
+    const hint= e.quiet&&p&&p.c.trueLevel<=2&&(e.choice==="ignore"||e.choice==="scold")? `（${p.c.name}真實是 ${p.c.trueLevel} 級，平常安靜的人開口喊，往往是狀況真的變了。）`:"";
+    return el("p",{text:`${clockStr(e.t)}　${e.name}${e.kind==="barge"?"闖到檢傷台":"在候診區大喊"}。${EVTXT[e.choice]||"（還沒處理就交班了）"}${hint}`});
+  }) : [el("p",{text:"這個班次沒有發生偶發事件。偶發事件不是每局都有。"})];
+  const K=(t,p)=>el("div",{class:"rule"},el("b",{text:t}),el("p",{text:p}));
+  const L=(href,t)=>el("a",{href,target:"_blank",rel:"noopener"},t);
+  showOverlay(el("div",{class:"sheet",role:"dialog","aria-modal":"true","aria-label":"交班報告"},
+    el("div",{class:"grade"},el("div",{class:"g",text:sc.grade}),
+      el("div",{},el("div",{class:"note",text:"班次評等"}),el("div",{class:"total"+(sc.total<0?" neg":""),text:`${sc.total} / ${sc.max} 分`}),
+        el("div",{class:"note",text:`倒下 ${sc.collapses} 人${sc.collapses?"（評等降一級）":""}${sc.famAvg!=null?"｜家屬平均焦慮 "+sc.famAvg+"/100":""}${S.aiCalls?"｜本局病人 AI 回應 "+S.aiCalls+" 次":""}`}))),
+    el("div",{class:"rule"},el("b",{text:"怎麼算分"}),
+      el("div",{class:"legend"},["分對 ",el("b",{text:"100"})],["高估一級 ",el("b",{text:"70"})],["高估兩級 ",el("b",{text:"40"})],["低估一級 ",el("b",{class:"neg",text:"20"})],["低估兩級以上 ",el("b",{class:"neg",text:"0"})]),
+      el("p",{text:"每位病人最多 100 分。超過該級建議的看診時間 −10（這不全是你的錯：問太久、床位不夠、同時來太多重症都會造成），病人倒下 −50；只要有人倒下，評等降一級。低估比高估扣得多，因為把重症判輕的代價是有人在候診區倒下。"})),
+    el("h3",{text:"你的稱號"}),
+    el("div",{class:"verdict"},el("div",{class:"vt",text:"「"+ttl[0]+"」"}),el("div",{class:"vd",text:ttl[1]}),el("div",{class:"note",text:verdict(dims)})),
+    el("h3",{text:"偏誤切片"}),
+    el("p",{text:"把你給的級數減去真實級數，依病人特徵分組平均。正數代表低估（判得太輕）。"}),
+    el("div",{class:"bias"},biasEls),
+    el("h3",{text:"低估與延誤回放"}),
+    ...underEls,
+    el("h3",{text:"逐位病人"}),
+    el("div",{class:"tbl"},el("table",{},el("thead",{},el("tr",{},["病人","真實狀況","真實","你給","結果","項目","得分"].map(h=>el("th",{text:h})))),el("tbody",{},ptRows))),
+    el("h3",{text:"偶發事件"}),
+    ...evEls,
+    el("h3",{text:"檢傷小知識"}),
+    el("div",{class:"know"},
+      K("誰來檢傷？","台灣急診的檢傷由受過訓練的檢傷護理師在病人到院後先做，決定級數與區域；醫師再依級數順序看診。"),
+      K("TTAS 台灣急診五級檢傷","台灣自 2010 年起全國急診採用「台灣急診五級檢傷分類」（TTAS），以加拿大的 CTAS 為基礎修訂。1 級立即處置，2 級 10 分鐘，3 級 30 分鐘內。"),
+      K("怎麼判級？","實際流程是先選病人的「主訴」，再看第一級調節變數（呼吸窘迫、血行動力、意識程度、體溫），最後看第二級調節變數（疼痛程度、受傷機轉等）。遊戲為了好上手，省略了選主訴這一步。"),
+      K("等候時要重新評估","病人在候診區的狀況會變。外觀變差、家屬說「跟平常不一樣」時，應該重新檢傷，不是等輪到他。"),
+      K("非典型表現","女性、長者、糖尿病患者的心肌梗塞，常以上腹痛、噁心、疲倦表現；長者的感染可能不太發燒，而是突然意識混亂。"),
+      K("音量不等於嚴重度","大聲喊痛的人不一定危急，安靜忍耐的人也不一定沒事。研究也發現誤判在不同族群、不同時段有系統性差異。")),
+    el("h3",{text:"延伸閱讀"}),
+    el("div",{class:"links"},
+      L("https://mohw.gov.tw/dl-66171-5e1ceebd-e4bd-48f1-ab23-25b88950620a.html","衛福部｜急診五級檢傷分類基準（成人非外傷）"),
+      L("https://mohw.gov.tw/dl-66174-ff4e5da2-ddc5-4f07-9f37-67434e5a1177.html","衛福部｜急診五級檢傷分類基準（生命徵象）"),
+      L("https://www.sem.org.tw/","台灣急診醫學會"),
+      L("https://tdr.lib.ntu.edu.tw/handle/123456789/55301","臺大論文｜急診五級檢傷病人等候時間與預後之相關性"),
+      L("https://divisionofresearch.kaiserpermanente.org/?p=13494","Kaiser Permanente｜Study examines rates of mistriage"),
+      L("https://health.tvbs.com.tw/medical/306068","TVBS 健康｜女性心肌梗塞的非典型症狀")),
+    el("h3",{text:"回饋"}),
+    feedbackBlock(sc,ttl),
+    el("p",{class:"disc",text:"案例與人物皆為虛構，如有雷同，純屬巧合。"}),
+    el("div",{},el("button",{class:"btn",onclick:()=>{hideOverlay();newGame();render();showTitle();}},"再值一次班"))
+  ));
+}
+
+/* ============ 畫面 ============ */
+function showOverlay(node){ const o=$("overlay"); o.replaceChildren(node); o.hidden=false; o.scrollTop=0; const b=node.querySelector(".btn")||node.querySelector("button"); b&&b.focus(); }
+function hideOverlay(){ $("overlay").hidden=true; $("overlay").replaceChildren(); }
+let flashT=null;
+function flash(msg){ const t=$("toast"); t.textContent=msg; clearTimeout(flashT); flashT=setTimeout(()=>t.textContent="",4000); }
+
+function renderLive(){
+  if(!S) return;
+  $("clock").textContent=clockStr(S.t);
+  $("left").textContent=Math.max(0,Math.ceil(SHIFT_MIN-S.t/60));
+  $("bedsR").textContent=bedsFree("resus");
+  $("bedsT").textContent=bedsFree("treat");
+  const wait=S.pts.filter(p=>p.status==="waiting"||p.status==="interview");
+  $("qcount").textContent=wait.length;
+  $("doneN").textContent=S.pts.filter(p=>p.triage&&!p.triage.forced).length+"/"+S.pts.length;
+  // 更新佇列計時與顏色（不重建 DOM）
+  for(const p of wait){
+    const card=document.querySelector(`[data-pid="${p.c.id}"]`);
+    if(!card){ renderQueue(); return; }
+    card.className="card s"+stageOf(p)+(S.cur===p?" active":"");
+    card.querySelector(".wait").textContent=mmss(S.t-arriveSec(p));
+  }
+  if(document.querySelectorAll("#queue .card").length!==wait.length) renderQueue();
+  if(S.cur){ const lk=$("ptHead").querySelector(".look"); if(lk) lk.textContent="外觀："+lookText(S.cur); }
+  animLive();
+  $("pauseBtn").textContent=S.running?"暫停":"繼續";
+}
+function renderQueue(){
+  const q=$("queue"); const wait=S.pts.filter(p=>p.status==="waiting"||p.status==="interview");
+  q.replaceChildren(...(wait.length? wait.map(p=>el("button",{class:"card s"+stageOf(p)+(S.cur===p?" active":""),"data-pid":p.c.id,onclick:()=>callPatient(p),"aria-label":"叫號 "+p.c.name},
+      el("span",{class:"who",text:`${p.c.name}　${p.c.age}${p.c.sex}`}),el("span",{class:"wait",text:mmss(S.t-arriveSec(p))}),
+      el("span",{class:"cc",text:p.c.short+(p.called&&S.cur!==p?"（問診中斷）":"")})))
+    : [el("div",{class:"empty",text:S.t<1?"等待第一位病患到診…":"目前沒有候診病患"})]));
+}
+function renderDone(){
+  const d=S.pts.filter(p=>p.triage);
+  $("done").replaceChildren(...(d.length? d.map(p=>el("div",{class:"doneitem"},
+      el("span",{class:"chip c"+(p.triage.level??1),text:p.triage.forced||p.collapsed?"!":p.triage.level}),
+      el("span",{text:`${p.c.name}　${p.collapsed?"倒下・急救區":p.triage.dest==="resus"?"急救區":p.triage.dest==="treat"?"診療區":"候診區"}`})))
+    : [el("div",{class:"empty",text:"尚未完成檢傷"})]));
+}
+function renderLevels(){
+  $("levels").replaceChildren(...[1,2,3,4,5].map(n=>el("button",{type:"button",class:"lv l"+n,role:"radio","aria-checked":String(S.selLevel===n),disabled:!S.cur,onclick:()=>{S.selLevel=n; render();}},
+    el("b",{text:n}),el("span",{text:LVNAME[n]}))));
+}
+function renderVitals(){
+  const p=S.cur, v=p&&p.vitalsTaken;
+  const abn={BP:x=>{const s=parseInt(x);return s>=180||s<90;},HR:x=>x>=110||x<50,RR:x=>x>=24||x<10,SpO2:x=>x<94,T:x=>x>=38.5||x<35.5};
+  $("vitals").replaceChildren(...[["BP","血壓"],["HR","心跳"],["RR","呼吸"],["SpO2","血氧"],["T","體溫"]].map(([k,n])=>
+    el("div",{class:"vital"},el("span",{},el("button",{class:"term",type:"button","data-term":"v_"+k,text:n})),el("b",{class:v&&abn[k](v[k])?"abn":"",text:v?String(v[k]).replace(/（.+）/,""):"—"}))),
+    el("div",{class:"vital"},el("span",{text:"備註"}),el("b",{style:"font-size:11px",text:v? (v.note || (/（/.test(v.BP)?v.BP.match(/（(.+)）/)[1]:"—")) :"—"})));
+}
+function render(){
+  if(!S) return;
+  renderQueue(); renderDone(); renderLevels(); renderVitals();
+  const p=S.cur, on=!!p && !S.ended;
+  syncScene(on?p:null);
+  $("idle").hidden=on; $("ptHead").hidden=!on; $("chat").hidden=!on; $("quick").hidden=!on; $("askForm").hidden=!on;
+  $("formWho").textContent=p? p.c.name : "—";
+  $("submitBtn").disabled=!on||!S.selLevel||S.busy;
+  $("dest").replaceChildren(...(S.selLevel&&on? ["送往 ",el("b",{text:DEST[S.selLevel][0]}),"：",DEST[S.selLevel][1]] : ["選好級數後，會依級數送往對應區域。"]));
+  for(const id of ["askBtn","vitalBtn","lookBtn","askInput"]) $(id).disabled=!on||S.busy;
+  $("askBtn").firstChild.textContent=S.busy?"…":"問";
+  if(on){
+    $("ptHead").replaceChildren(
+      el("h2",{},`${p.c.name}`,el("small",{text:`${p.c.age} 歲・${p.c.sex}${p.c.job?"・"+p.c.job:""}・${p.c.mode}${p.c.family?"・陪同："+p.c.family.who:""}`}),el("small",{class:"mono",text:"到診 "+clockStr(arriveSec(p))})),
+      el("div",{class:"look",text:"外觀："+lookText(p)}));
+    const chat=$("chat");
+    chat.replaceChildren(...p.log.map(m=> m.who==="sys"? el("div",{class:"msg sys",text:m.text})
+      : el("div",{class:"msg "+m.who},el("span",{class:"from",text:m.who==="nurse"?"你":m.who==="family"?famName(p):p.c.name}),m.text)));
+    chat.scrollTop=chat.scrollHeight;
+  }
+  renderLive();
+}
+const QUICK=["還有哪裡不舒服嗎？","是突然開始，還是慢慢變嚴重？","有什麼疾病史？平常有在吃藥嗎？","有沒有冒冷汗、頭暈或喘？","痛起來是什麼感覺？會跑到別的地方嗎？","平常的狀況跟今天比起來呢？"];
+(()=>{ const q=$("quick"); const upd=()=>q.classList.toggle("atend",q.scrollLeft+q.clientWidth>=q.scrollWidth-4);
+  q.addEventListener("wheel",e=>{ if(Math.abs(e.deltaY)>Math.abs(e.deltaX)&&q.scrollWidth>q.clientWidth){ e.preventDefault(); q.scrollLeft+=e.deltaY; } },{passive:false});
+  q.addEventListener("scroll",upd); try{ new ResizeObserver(upd).observe(q); }catch(_){} })();
+function buildQuick(){ $("quick").replaceChildren(...QUICK.map(q=>el("button",{type:"button",onclick:()=>ask(q)},q))); }
+
+function showTitle(){
+  showOverlay(el("div",{class:"sheet",role:"dialog","aria-modal":"true","aria-label":"開始"},
+    el("div",{},el("h1",{},"下一位",el("span",{class:"ecg",text:"："}),"Triage"),el("div",{class:"subt",text:"Emergency Department Triage Simulator"})),
+    el("p",{class:"lead"},"今晚 22:00 到 23:30，你是急診的",el("button",{class:"term","data-term":"triage",type:"button",text:"檢傷護理師"}),"。病人一進門，你要先問診、判斷有多急，給他一個 ",el("button",{class:"term","data-term":"ttas",type:"button",text:"TTAS"})," 級數；醫師再依你排的順序看診。問得越仔細越準，但外面排隊的人正在惡化。"),
+    el("div",{class:"rules"},
+      el("div",{class:"rule"},el("b",{text:"1　叫號、追問"}),el("p",{text:"病人會先說自己哪裡不舒服，你接著追問。問一句花 30 秒，量生命徵象 2 分鐘。病人會淡化、會誤會，家屬會插話。"})),
+      el("div",{class:"rule"},el("b",{text:"2　給級數"}),el("p",{text:"選 1 到 5 級，系統依級數安排區域與床位。送出後不會告訴你對錯。"})),
+      el("div",{class:"rule"},el("b",{text:"3　交班看結果"}),el("p",{text:"每人最多 100 分：分對 100，高估一級 70，低估一級只剩 20。拿不準時，寧可判重一點。"}))),
+    el("div",{class:"ttasrow"},[1,2,3,4,5].map(n=>el("span",{},el("span",{class:"chip c"+n,text:n})," "+LVNAME[n]+"・"+(n===1?"立即":n<=3?ALLOWED[n]+" 分內":n===4?"1 小時內":"2 小時內")))),
+    el("p",{text:"看不懂的詞：點虛線底的字，或右上角「名詞解釋」。"}),
+    el("p",{id:"aiNote",text: aiNoteText()}),
+    el("div",{class:"btnrow"},el("button",{class:"btn",onclick:()=>{hideOverlay();S.running=true;startLoop();render();}},"開始值班"),window.claude?null:el("button",{class:"btn ghost",type:"button",onclick:showAISettings},"AI 設定")),
+    el("p",{class:"disc",text:"分級依據衛福部急診五級檢傷分類基準簡化。案例與人物皆為虛構，如有雷同，純屬巧合。"})
+  ));
+}
+
+/* ============ 3D 場景（方塊風，可用「動畫」按鈕關閉） ============ */
+let ANIM=true; try{ if(localStorage.getItem("np_anim")==="0") ANIM=false; }catch(_){}
+let sceneHold=0, FONTS_OK=false;
+const REDUCED=(()=>{try{return matchMedia("(prefers-reduced-motion: reduce)").matches}catch(_){return false}})();
+const W3={ok:false,failed:false,bargeP:null,alarmUntil:0};
+const CLOTH={stroke_m72:0x7a6a55,co_f34:0x4f8f7a,hypo_m66:0x8a9fb5,asthma_f17:0x2f4f8f,fish_f45:0xd96b3a,drunk_m42:0x5a5f3a,fs_c2:0x7fc6e8,cold_f23:0xb5a7d6,sprain_m20:0xe0603a,ami_f64:0x9b6fb0,fever_c8:0xf2b84b,panic_m35:0x4a74c9,cut_m55:0x6b7d4a,sepsis_m78:0x8c8f96,ectopic_f28:0xd77a9a,dissect_m50:0x3b4e63};
+const HAIR={stroke_m72:0xbdbdbd,co_f34:0x2a1a12,hypo_m66:0x7a7a7a,asthma_f17:0x1a1a1a,fish_f45:0x5a3a22,drunk_m42:0x1d1d1d,fs_c2:0x2a1a12,cold_f23:0x6b4a2a,sprain_m20:0x2b1d14,ami_f64:0x8a8a8a,fever_c8:0x3a2516,panic_m35:0x1d1d1d,cut_m55:0x555555,sepsis_m78:0xe2e2e2,ectopic_f28:0x2a1a12,dissect_m50:0x2e2a26};
+const FAMC={stroke_m72:[0xa35d6a,0x9a9a9a],co_f34:[0xe0b04a,0x2a1a12],hypo_m66:[0xf0f0f0,0x2a1a12],asthma_f17:[0x2f4f8f,0x3a2516],drunk_m42:[0x24324a,0x1b1b1b],fs_c2:[0xd77a9a,0x2a1a12],sprain_m20:[0x3d8f6a,0x1b1b1b],ami_f64:[0x5a6470,0x9a9a9a],fever_c8:[0xc94f62,0x2a1a12],sepsis_m78:[0x5e8fb0,0x2a1a12],dissect_m50:[0xb5884a,0x3a2a1a]};
+const LVCOL={1:"#3f7ee3",2:"#e14a4a",3:"#e7c43f",4:"#4fb874",5:"#e8edf1"};
+const STCOL=["#6f8294","#c9961c","#dd7329","#e04646"];
+const SKIN=[0xf0cfae,0xe2d6cb,0xc9d0d2];
+const SPOT={seat:[2,0.15],fam:[3.35,0.4],nurse:[2,-2.15],barge:[0.6,-0.1],resus:[7.6,-4.7],treat:[5.2,-4.7],entry:[-10.4,4.2]};
+const AISLE=1.6;
+const SLOTS=[]; for(const z of [-3.3,-1.95,-0.6]) for(const x of [-7.7,-6.7,-5.7,-4.7,-3.7]) SLOTS.push([x,z]);
+(()=>{ const done=()=>{ if(FONTS_OK) return; FONTS_OK=true; if(S) render(); }; try{ document.fonts.ready.then(done); }catch(_){ done(); } setTimeout(done,2500); })();
+
+function initW3(){
+  if(W3.ok) return true; if(W3.failed||!window.THREE){ W3.failed=true; return false; }
+  const T=THREE, host=$("scene");
+  let renderer;
+  try{ renderer=new T.WebGLRenderer({antialias:true}); }catch(e){ W3.failed=true; return false; }
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio||1,2));
+  renderer.outputEncoding=T.sRGBEncoding;
+  renderer.shadowMap.enabled=true; renderer.shadowMap.type=T.PCFShadowMap;
+  host.prepend(renderer.domElement);
+  host.append(el("div",{class:"flash",id:"flash"}));
+  const scene=new T.Scene(); scene.background=new T.Color(0xd5dee3);
+  const cam=new T.PerspectiveCamera(32,2,0.5,120);
+  scene.add(new T.HemisphereLight(0xffffff,0x5d6f7c,0.8));
+  const sun=new T.DirectionalLight(0xffffff,0.5); sun.position.set(-5,14,9); sun.castShadow=true; sun.shadow.mapSize.set(1024,1024);
+  Object.assign(sun.shadow.camera,{left:-13,right:13,top:11,bottom:-11,near:1,far:40}); sun.shadow.bias=-0.0008; scene.add(sun);
+
+  const FONT='"Noto Sans TC","PingFang TC","Microsoft JhengHei",system-ui,sans-serif';
+  const lam=(c,o)=>new T.MeshLambertMaterial(Object.assign({color:c},o||{}));
+  const basic=(c,o)=>new T.MeshBasicMaterial(Object.assign({color:c},o||{}));
+  const R=(g,c,x,y,w,h)=>{g.fillStyle=c;g.fillRect(x,y,w||1,h||1)};
+  function pxTex(size,draw,rx,ry){ const k=8,c=document.createElement("canvas"); c.width=c.height=size*k; const g=c.getContext("2d"); g.scale(k,k); draw(g,size);
+    const t=new T.CanvasTexture(c); t.magFilter=T.NearestFilter; t.wrapS=t.wrapT=T.RepeatWrapping; t.repeat.set(rx||1,ry||1); t.encoding=T.sRGBEncoding; t.anisotropy=renderer.capabilities.getMaxAnisotropy(); return t; }
+  function box(w,h,d,m,x,y,z,parent,shadow){ const o=new T.Mesh(new T.BoxGeometry(w,h,d),m); o.position.set(x,y,z); if(shadow!==false){o.castShadow=true;o.receiveShadow=true;} (parent||scene).add(o); return o; }
+  function canvasPlane(w,h,draw){ const c=document.createElement("canvas"); c.width=Math.round(w*160); c.height=Math.round(h*160); const t=new T.CanvasTexture(c); t.encoding=T.sRGBEncoding;
+    const m=new T.Mesh(new T.PlaneGeometry(w,h),basic(0xffffff,{map:t,transparent:true})); m.userData.redraw=(...a)=>{ const g=c.getContext("2d"); g.clearRect(0,0,c.width,c.height); draw(g,c.width,c.height,...a); t.needsUpdate=true; }; m.userData.redraw(); scene.add(m); return m; }
+  function sign(w,h,text,bg,fg){ return canvasPlane(w,h,(g,W,H)=>{ g.fillStyle=bg; g.fillRect(0,0,W,H); g.fillStyle=fg; g.font=`700 ${Math.round(H*.56)}px ${FONT}`; g.textAlign="center"; g.textBaseline="middle"; g.fillText(text,W/2,H/2+2); }); }
+  function floorText(text,x,z,w){ const m=canvasPlane(w,w*.22,(g,W,H)=>{ g.fillStyle="rgba(70,95,110,.38)"; g.font=`900 ${Math.round(H*.7)}px ${FONT}`; g.textAlign="center"; g.textBaseline="middle"; g.fillText(text,W/2,H/2); }); m.rotation.x=-Math.PI/2; m.position.set(x,0.02,z); }
+
+  /* 房間 */
+  const tile=pxTex(16,(g,s)=>{R(g,"#ffffff",0,0,s,s);R(g,"#c3cfd4",0,0,s,1);R(g,"#c3cfd4",0,0,1,s);R(g,"#e7edef",8,1,1,s-1);R(g,"#e7edef",1,8,s-1,1);},21,12);
+  tile.repeat.set(28,22); const floor=new T.Mesh(new T.PlaneGeometry(28,22),lam(0xe9eff1,{map:tile})); floor.rotation.x=-Math.PI/2; floor.position.set(3.5,0,5.4); floor.receiveShadow=true; scene.add(floor);
+  const zone=(w,d,x,z,c)=>{const m=new T.Mesh(new T.PlaneGeometry(w,d),lam(c,{transparent:true,opacity:.55})); m.rotation.x=-Math.PI/2; m.position.set(x,0.01,z); m.receiveShadow=true; scene.add(m);};
+  zone(6,4.2,-5.7,-1.95,0x9fc3d6); zone(3.6,3.4,2,-0.85,0x9ed6cc);
+  const wallM=lam(0xeef3f5), baseM=lam(0x8aa1ad), stripe=lam(0x5ec4d4);
+  box(28,2.7,.3,wallM,3.5,1.35,-5.55); box(28,.24,.34,baseM,3.5,.12,-5.53); box(28,.12,.32,stripe,3.5,1.15,-5.53,null,false);
+  box(.3,2.7,22,wallM,17.65,1.35,5.4); box(.34,.24,22,baseM,17.63,.12,5.4);
+  box(.3,2.7,8.6,wallM,-10.65,1.35,-1.4); box(.34,.24,8.6,baseM,-10.63,.12,-1.4); box(.32,.12,8.6,stripe,-10.63,1.15,-1.4,null,false);
+  floorText("候診區",-5.7,0.55,2.4); floorText("入口",-9.6,5.3,1.6); floorText("檢傷站",2,1.35,1.8);
+  function door(x,col,bg,label){ box(1.5,2.15,.08,lam(col),x,1.075,-5.37); box(.06,2.15,.1,lam(0x2b3a44),x,1.075,-5.35,null,false); const sg=sign(1.6,.42,label,bg,"#ffffff"); sg.position.set(x,2.42,-5.38); }
+  door(SPOT.treat[0],0x3f9aa8,"#2f7f8b","診療區"); door(SPOT.resus[0],0xc94848,"#b33a3a","急救區");
+  /* 室外：救護車停車區 */
+  const asph=new T.Mesh(new T.PlaneGeometry(24,40),lam(0x8b959c)); asph.rotation.x=-Math.PI/2; asph.position.set(-22.8,-.01,8); asph.receiveShadow=true; scene.add(asph);
+  for(let i=0;i<4;i++) box(.18,.02,1.6,basic(0xd9dfe2),-13.5-i*2.6,.01,3.4,null,false);
+  const amb=new T.Group(); amb.position.set(-14.6,0,3.6); scene.add(amb);
+  box(1.9,1.7,3.6,lam(0xf4f6f7),0,1.15,0,amb); box(1.9,1.1,1.2,lam(0xf4f6f7),0,.85,2.35,amb); box(1.92,.22,4.82,lam(0xd23b3b),0,.95,.6,amb,false);
+  box(1.6,.5,.06,lam(0x26343b),0,1.25,2.96,amb,false); const siren=basic(0x5a1f1f); box(1.2,.16,.3,siren,0,2.08,1.4,amb,false);
+  for(const [x,z] of [[-.95,-1.1],[.95,-1.1],[-.95,2.2],[.95,2.2]]){ const w=new T.Mesh(new T.CylinderGeometry(.38,.38,.28,14),lam(0x1d2328)); w.rotation.z=Math.PI/2; w.position.set(x,.38,z); amb.add(w); }
+  const sg2=sign(1.7,.42,"急診入口","#b33a3a","#ffffff"); sg2.position.set(-10.3,2.35,3.6); sg2.rotation.y=Math.PI/2;
+  /* 留觀區 */
+  floorText("留觀區",14,-1.7,2.2);
+  function gurney(lying,col){
+    const g=new T.Group(), fm=lam(0x9aa8b0);
+    box(.72,.08,1.9,fm,0,.6,0,g); box(.68,.12,1.82,lam(0xf7f9fa),0,.72,0,g);
+    for(const [x,z] of [[-.3,-.8],[.3,-.8],[-.3,.8],[.3,.8]]){ box(.05,.55,.05,fm,x,.3,z,g,false); box(.1,.1,.1,lam(0x2b3338),x,.05,z,g,false); }
+    box(.72,.35,.05,fm,0,.82,-.94,g,false);
+    const ly=new T.Group(); g.add(ly); g.userData.ly=ly;
+    if(lying){ box(.6,.16,1.15,lam(col||0x7fa6c9),0,.86,.25,ly); box(.4,.08,.3,lam(0xffffff),0,.82,-.62,ly,false); box(.34,.32,.3,lam(SKIN[0]),0,.94,-.55,ly); box(.36,.1,.32,lam(0x3a2a20),0,1.13,-.58,ly,false); }
+    scene.add(g); return g;
+  }
+  for(const [x,c] of [[12.3,0x8fb8a6],[14.1,0xc9a07f],[15.9,0]]){ const gg=gurney(!!c,c); gg.position.set(x,0,-4.2);
+    box(.06,1.8,.06,lam(0xb7c3c9),x+.55,.9,-4.9); box(.25,.3,.05,lam(0x8fd3ff,{transparent:true,opacity:.7}),x+.55,1.7,-4.9,null,false);
+    box(.05,2,1.6,lam(0xbfd9e0,{transparent:true,opacity:.55}),x+1,1,-3.9,null,false); }
+  /* 候診椅 */
+  const seatM=lam(0x4f7fa8), legM=lam(0x34444f);
+  for(const [x,z] of SLOTS){ box(.7,.1,.7,seatM,x,.45,z); box(.1,.62,.7,seatM,x-.32,.76,z); box(.12,.4,.12,legM,x,.2,z); }
+  /* 小擺設 */
+  box(.5,1.1,.5,lam(0xdfe8ec),-9.9,.55,-4.9); box(.36,.4,.36,lam(0x7fb7de,{transparent:true,opacity:.75}),-9.9,1.3,-4.9);
+  box(.5,.45,.5,lam(0xa0715a),-2.6,.225,-4.9); box(.7,.8,.7,lam(0x4f9a5c),-2.6,.85,-4.9);
+  /* 叫號螢幕 */
+  box(2.6,.85,.1,lam(0x1b252c),-5.7,1.95,-5.4);
+  const board=canvasPlane(2.45,.72,(g,W,H,name)=>{ g.fillStyle="#071016"; g.fillRect(0,0,W,H); g.fillStyle="#7fe3c8"; g.font=`600 ${Math.round(H*.28)}px ${FONT}`; g.textBaseline="middle"; g.fillText("目前叫號",W*.05,H*.3); g.fillStyle="#ffffff"; g.font=`700 ${Math.round(H*.4)}px ${FONT}`; g.fillText(name||"請稍候",W*.05,H*.7); });
+  board.position.set(-5.7,1.95,-5.34);
+  /* 檢傷台 */
+  box(2.8,.86,.8,lam(0xdfe6e9),2,.43,-1.25); box(2.9,.06,.9,lam(0x9fb3bc),2,.89,-1.25);
+  const ds=sign(1.7,.34,"檢傷站 TRIAGE","#2f7f8b","#ffffff"); ds.position.set(2,.55,-.84);
+  box(.5,.45,.5,lam(0x7b8f9b),SPOT.seat[0],.225,SPOT.seat[1]+.05);
+  box(.08,.32,.08,legM,1.15,1.06,-1.4); box(.98,.64,.08,lam(0x1b252c),1.15,1.5,-1.45);
+  const mon=canvasPlane(.9,.56,(g,W,H,v)=>{ g.fillStyle="#071016"; g.fillRect(0,0,W,H); g.textBaseline="top";
+    if(!v){ g.fillStyle="#3d6b74"; g.font=`600 ${Math.round(H*.16)}px ui-monospace,monospace`; g.fillText("VITALS",W*.07,H*.1); g.fillText("— — —",W*.07,H*.42); return; }
+    const L=[["HR",v.HR,v.HR>=110||v.HR<50],["BP",String(v.BP).replace(/（.+）/,""),parseInt(v.BP)>=180||parseInt(v.BP)<90],["SpO2",v.SpO2+"%",v.SpO2<94],["T",v.T,v.T>=38.5]];
+    g.font=`700 ${Math.round(H*.17)}px ui-monospace,monospace`; L.forEach(([k,val,bad],i)=>{ g.fillStyle=bad?"#ff6b6b":"#7fe3c8"; g.fillText(k+" "+val,W*.07,H*(.07+i*.22)); }); });
+  mon.position.set(1.15,1.5,-1.405);
+  const alarmM=basic(0x4a2626); box(.6,.2,.14,alarmM,2,2.5,-5.4,null,false);
+
+  /* 方塊人 */
+  const FACE=pxTex(8,(g)=>{R(g,"#ffffff",0,0,8,8);R(g,"#2b211b",2,3);R(g,"#2b211b",5,3);R(g,"#b5776a",3,6,2,1);});
+  function sprite(w,h,sx,sy){ const c=document.createElement("canvas"); c.width=w*2; c.height=h*2; const tex=new T.CanvasTexture(c); tex.encoding=T.sRGBEncoding;
+    const s=new T.Sprite(new T.SpriteMaterial({map:tex,depthTest:false,transparent:true})); s.scale.set(sx,sy,1); s.renderOrder=10; s.userData={c,tex,key:""}; return s; }
+  function pill(spr,text,fill,ink){ const key=text+fill+ink; if(spr.userData.key===key) return; spr.userData.key=key;
+    const {c,tex}=spr.userData, g=c.getContext("2d"), W=c.width, H=c.height; g.clearRect(0,0,W,H);
+    let fs=Math.round(H*.5); g.font=`700 ${fs}px ${FONT}`; while(g.measureText(text).width>W*.86&&fs>12){ fs-=2; g.font=`700 ${fs}px ${FONT}`; }
+    const tw=Math.min(W-8,g.measureText(text).width+H*.8), x=(W-tw)/2, r=(H-12)/2;
+    g.beginPath(); g.moveTo(x+r,6); g.arcTo(x+tw,6,x+tw,H-6,r); g.arcTo(x+tw,H-6,x,H-6,r); g.arcTo(x,H-6,x,6,r); g.arcTo(x,6,x+tw,6,r); g.closePath();
+    g.fillStyle=fill; g.fill(); g.fillStyle=ink; g.textAlign="center"; g.textBaseline="middle"; g.fillText(text,W/2,H/2+1); tex.needsUpdate=true; }
+  function person(o){
+    const g=new T.Group(), body=new T.Group(); g.add(body);
+    const skin=lam(SKIN[0]), face=lam(SKIN[0],{map:FACE}), cm=lam(o.cloth), pm=lam(o.pants||0x35424c), hm=lam(o.hair);
+    const joint=(x,y)=>{ const J=new T.Group(); J.position.set(x,y,0); body.add(J); return J; };
+    const legL=joint(-.12,.72), legR=joint(.12,.72); box(.22,.72,.24,pm,0,-.36,0,legL); box(.22,.72,.24,pm,0,-.36,0,legR);
+    box(.52,.64,.32,cm,0,1.04,0,body);
+    const armL=joint(-.35,1.32), armR=joint(.35,1.32); box(.17,.58,.19,cm,0,-.27,0,armL); box(.17,.58,.19,cm,0,-.27,0,armR);
+    box(.14,.1,.16,skin,0,-.61,0,armL); box(.14,.1,.16,skin,0,-.61,0,armR);
+    const head=new T.Mesh(new T.BoxGeometry(.46,.46,.46),[skin,skin,hm,skin,face,skin]); head.position.y=1.6; head.castShadow=true; body.add(head);
+    box(.5,.13,.5,hm,0,1.86,0,body); box(.5,.32,.1,hm,0,1.7,-.21,body);
+    if(o.long) box(.5,.62,.12,hm,0,1.48,-.22,body);
+    if(o.cap){ box(.34,.12,.28,lam(0xffffff),0,1.97,.02,body); box(.12,.08,.02,lam(0xd84a4a),0,1.98,.17,body,false); }
+    let wheel=null;
+    if(o.wheel){ wheel=new T.Group(); g.add(wheel); const wm=lam(0x2d3940), rim=lam(0x8a99a3);
+      box(.62,.1,.62,wm,0,.42,.05,wheel); box(.62,.62,.08,wm,0,.76,-.27,wheel);
+      for(const sx of [-.38,.38]){ const w=new T.Mesh(new T.CylinderGeometry(.36,.36,.06,16),rim); w.rotation.z=Math.PI/2; w.position.set(sx,.36,0); w.castShadow=true; wheel.add(w); } }
+    const sc=o.scale||1;
+    const plate=sprite(256,56,2.7/sc,.59/sc); plate.position.y=2.42; g.add(plate);
+    const bub=sprite(512,72,4.9/sc,.69/sc); bub.position.y=3.12; bub.visible=false; g.add(bub);
+    g.scale.setScalar(sc); scene.add(g);
+    return {g,body,legL,legR,armL,armR,skin,face,plate,bub,wheel};
+  }
+
+  /* 角色 */
+  const actors=new Map(); let game=null;
+  const slotsUsed=new Array(SLOTS.length).fill(null);
+  const nurseA={key:"nurse",P:person({cloth:0x3f9aa8,pants:0x2f7f8b,hair:0x2a1d16,cap:true}),x:SPOT.nurse[0],z:SPOT.nurse[1],face:0,path:[],ph:0,bubbleUntil:0,talkUntil:0,leanUntil:0,bounceUntil:0};
+  pill(nurseA.P.plate,"你・檢傷護理師","#5ec4d4","#06222a");
+  /* 背景人物：照劇本行動（推床送進急救區後消失、醫師坐在看診桌、偶爾去留觀區巡床） */
+  const movers=[];
+  const rnd=(r)=>Array.isArray(r)? r[0]+Math.random()*(r[1]-r[0]) : r;
+  function mover(opt,label,script,withBed){
+    const a={P:person(opt),x:0,z:0,face:0,path:[],goal:null,ph:Math.random()*6,bubbleUntil:0,talkUntil:0,leanUntil:0,bounceUntil:0,script,i:0,until:0,push:false,sit:false,bed:null};
+    pill(a.P.plate,label,"rgba(34,48,60,.82)","#dfe8ee"); a.P.plate.scale.multiplyScalar(.8);
+    if(withBed){ const b=gurney(true,0xe6a6a6); scene.remove(b); b.position.set(0,0,1.45); a.P.g.add(b); a.bed=b; b.visible=false; }
+    a.P.g.visible=false; movers.push(a); return a;
+  }
+  function runScript(a,t){
+    if(a.path.length || t<a.until) return;
+    for(let guard=0;guard<12;guard++){
+      const st=a.script[a.i]; a.i=(a.i+1)%a.script.length;
+      if(st.show){ a.x=st.show[0]; a.z=st.show[1]; a.P.g.position.set(a.x,0,a.z); a.P.g.visible=true; if(st.face!=null){ a.face=st.face; a.P.g.rotation.y=st.face; } continue; }
+      if(st.hide!=null){ a.P.g.visible=false; a.sit=false; a.until=t+rnd(st.hide); return; }
+      if(st.bed!=null){ if(a.bed) a.bed.visible=st.bed; a.push=st.bed; continue; }
+      if(st.go){ const [x,z]=st.go; a.sit=false; a.path=[[x,z]]; a.goal={face: st.face!=null? st.face : Math.atan2(x-a.x,z-a.z), fast:!!st.fast}; return; }
+      if(st.fn){ st.fn(); continue; }
+      if(st.remove){ scene.remove(a.P.g); a.dead=true; return; }
+      if(st.sit!=null){ a.sit=true; if(st.face!=null) a.face=st.face; a.until=t+rnd(st.sit); return; }
+      if(st.wait!=null){ if(st.face!=null) a.face=st.face; a.until=t+rnd(st.wait); return; }
+    }
+  }
+  /* 推床的護理師：從入口推救護車送來的病人 → 送進急救區（消失）→ 空手出來走回入口（消失）→ 再推下一床 */
+  mover({cloth:0x5ab0a0,pants:0x3f8a7c,hair:0x3a2516,long:true},"護理師",[
+    {hide:[3,6]},{bed:true},{show:[-11.2,3.7],face:Math.PI/2},{go:[-9.2,2.5]},{go:[7.6,2.5]},{go:[7.6,-3.3],face:Math.PI},{hide:[7,12]},
+    {bed:false},{show:[7.6,-4.6],face:0},{go:[7.6,2.5]},{go:[-9.2,2.5]},{go:[-11.2,3.7]},{hide:[12,20]}],true);
+  /* 醫師：從診療區出來，到留觀區床尾逐床看過，再回診療區（消失），過一陣子再出來 */
+  mover({cloth:0xf2f4f5,pants:0x3b5b7a,hair:0x2a2a2a},"醫師",[
+    {hide:[2,5]},{show:[5.2,-4.6],face:0},{go:[5.2,-2.6]},{go:[12.3,-2.6],face:Math.PI},{wait:[3,5],face:Math.PI},
+    {go:[14.1,-2.6],face:Math.PI},{wait:[3,5],face:Math.PI},{go:[15.9,-2.6],face:Math.PI},{wait:[2,4],face:Math.PI},
+    {go:[5.2,-2.6]},{go:[5.2,-4.4],face:Math.PI},{hide:[10,18]}]);
+  /* 清潔人員：在前方走道拖地，走到底從診療區門口離開再回來 */
+  mover({cloth:0x8fa3b0,pants:0x5a6a75,hair:0x6b6b6b},"清潔人員",[
+    {show:[5.2,-4.6],face:0},{go:[5.2,3]},{go:[-2,3]},{wait:[2,4]},{go:[5.2,3]},{go:[5.2,-4.4],face:Math.PI},{hide:[15,25]}]);
+  /* 救護技術員：在救護車旁待命 */
+  mover({cloth:0xe4e8ea,pants:0x2b4a8a,hair:0x1d1d1d},"救護技術員",[
+    {show:[-13.2,1.8],face:Math.PI/2},{wait:[6,10]},{go:[-11.6,2.6]},{wait:[3,5],face:Math.PI/2},{go:[-13.2,1.8],face:0}]);
+  function stepMovers(dt,t){
+    for(let k=movers.length-1;k>=0;k--) if(movers[k].dead) movers.splice(k,1);
+    for(const m of movers){
+      runScript(m,t);
+      if(!m.P.g.visible) continue;
+      const had=m.path.length; step(m,dt,t);
+      if(had && !m.path.length && m.goal) m.face=m.goal.face;
+      if(m.push){ m.P.armL.rotation.x=m.P.armR.rotation.x=-1.25; }
+    }
+  }
+  /* 倒下時：急救小組推床從急救區衝出來，把病人抬上床推回去 */
+  function rescue(pa){
+    const D=SPOT.resus, px=pa.x, pz=pa.z, ax=px, az=Math.min(pz+1.45,2.4);
+    const lead=mover({cloth:0x5ab0a0,pants:0x3f8a7c,hair:0x1d1d1d},"急救小組",[],true);
+    const doc=mover({cloth:0xf2f4f5,pants:0x3b5b7a,hair:0x2a2a2a},"醫師",[]);
+    lead.bed.userData.ly.visible=false;
+    lead.script=[{bed:true},{show:[D[0],D[1]+.1],face:0},{go:[D[0],2.4],fast:true},{go:[ax,2.4],fast:true},{go:[ax,az],face:Math.PI,fast:true},{wait:2,face:Math.PI},
+      {fn:()=>{ pa.gone=true; pa.loaded=true; pa.P.g.visible=false; lead.bed.userData.ly.visible=true; }},{wait:.6},
+      {go:[ax,2.4],fast:true},{go:[D[0],2.4],fast:true},{go:[D[0],-3.3],face:Math.PI,fast:true},{hide:0},{remove:true}];
+    doc.script=[{wait:.4},{show:[D[0]+.4,D[1]+.1],face:0},{go:[D[0]+.9,2.4],fast:true},{go:[px+.9,2.4],fast:true},{go:[px+.85,pz],face:-Math.PI/2,fast:true},{wait:2.4,face:-Math.PI/2},
+      {go:[px+.9,2.4],fast:true},{go:[D[0]+.9,2.4],fast:true},{go:[D[0]+.4,-4.4],face:Math.PI,fast:true},{hide:0},{remove:true}];
+  }
+  function newActor(key,opt,dx){ const P=person(opt); const a={key,P,x:SPOT.entry[0]-(dx||0),z:SPOT.entry[1],face:Math.PI/2,path:[],goalKey:"",goal:null,sit:false,gone:false,slot:null,
+      bubbleUntil:0,bubbleText:"",bubbleKind:"",talkUntil:0,leanUntil:0,bounceUntil:0,fallAt:0,fall:0,ph:Math.random()*6}; P.g.position.set(a.x,0,a.z); actors.set(key,a); return a; }
+  function clearActors(){ for(const a of actors.values()) scene.remove(a.P.g); actors.clear(); slotsUsed.fill(null); }
+  function takeSlot(a){ if(a.slot==null){ let i=slotsUsed.indexOf(null); if(i<0) i=SLOTS.length-1; slotsUsed[i]=a; a.slot=i; } return a.slot; }
+  function freeSlot(a){ if(a.slot!=null){ if(slotsUsed[a.slot]===a) slotsUsed[a.slot]=null; a.slot=null; } }
+  function route(ax,az,bx,bz){ const pts=[]; if(Math.abs(ax-bx)>.6){ if(Math.abs(az-AISLE)>.05) pts.push([ax,AISLE]); pts.push([bx,AISLE]); } pts.push([bx,bz]); return pts; }
+  function setGoal(a,G){ if(!G.k.startsWith("slot")) freeSlot(a); if(a.goalKey===G.k) return; a.goalKey=G.k; a.goal=G; a.sit=false; a.path=route(a.x,a.z,G.x,G.z); }
+  function goalFor(a,p,fam){
+    if(W3.bargeP===p && (fam||!p.c.family)) return {k:"barge",x:SPOT.barge[0],z:SPOT.barge[1],face:Math.PI*.8,fast:true};
+    if(S.cur===p) return fam? {k:"fam",x:SPOT.fam[0],z:SPOT.fam[1],face:Math.PI+.45} : {k:"seat",x:SPOT.seat[0],z:SPOT.seat[1],face:Math.PI,sit:true};
+    if(p.status==="waiting"||p.status==="interview"||(p.status==="triaged"&&p.triage&&p.triage.dest==="wait")){ const i=takeSlot(a); return {k:"slot",x:SLOTS[i][0]+.05,z:SLOTS[i][1],face:Math.PI/2,sit:true,slot:i}; }
+    const d=p.triage&&p.triage.dest==="resus"?SPOT.resus:SPOT.treat;
+    return {k:"door",x:d[0]+(fam?.45:0),z:d[1]+(fam?.7:0),face:Math.PI,door:true};
+  }
+  function syncActors(t){
+    for(const p of S.pts){
+      if(!p.arrived) continue;
+      const id=p.c.id;
+      const pa=actors.get("p:"+id)||newActor("p:"+id,{cloth:CLOTH[id]||0x6f8294,hair:HAIR[id]||0x2a1a12,scale:p.c.age<4?.5:p.c.age<12?.68:1,long:p.c.sex==="女",wheel:/輪椅/.test(p.c.mode)},0);
+      const fa=p.c.family? (actors.get("f:"+id)||newActor("f:"+id,{cloth:(FAMC[id]||[0x6a7a8a])[0],hair:(FAMC[id]||[0,0x2a1a12])[1],scale:/兒子/.test(p.c.family.who)?.62:1,long:/媽媽|女兒|太太/.test(p.c.family.who)},.8)) : null;
+      if(p.collapsed && !p.afterShift){
+        if(!pa.fallAt){ pa.fallAt=t; pa.path=[]; pa.sit=false; freeSlot(pa); pa.goalKey="fallen"; rescue(pa);
+          if(fa){ fa.bubbleText="快來人啊！"; fa.bubbleKind="shout"; fa.bubbleUntil=t+3.5; fa.bounceUntil=t+2; } }
+        if(fa && !pa.loaded && fa.goalKey!=="fallen"){ setGoal(fa,{k:"fallen",x:pa.x-.75,z:pa.z+.35,face:Math.PI/2}); }
+        if(fa && pa.loaded && !fa.gone && fa.goalKey!=="toResus"){ setGoal(fa,{k:"toResus",x:SPOT.resus[0]+.5,z:SPOT.resus[1]+.7,face:Math.PI,door:true}); }
+      } else {
+        if(!pa.gone){ const G=goalFor(pa,p,false); if(G.k==="slot") G.k="slot"+G.slot; setGoal(pa,G); }
+        if(fa&&!fa.gone){ const G=goalFor(fa,p,true); if(G.k==="slot") G.k="slot"+G.slot; setGoal(fa,G); }
+      }
+      // 名牌
+      const st=stageOf(p);
+      let txt=p.c.name, fill=STCOL[Math.min(st,3)], ink="#ffffff";
+      if(p.collapsed&&!p.afterShift){ txt+="・倒下"; fill="#e04646"; }
+      else if(S.cur===p){ fill="#5ec4d4"; ink="#06222a"; }
+      else if(p.triage&&p.triage.level){ const lv=p.triage.level; txt+=`・${lv}級`; fill=LVCOL[lv]; ink=lv<=2?"#ffffff":"#111111"; }
+      pill(pa.P.plate,txt,fill,ink);
+      const sk=SKIN[Math.min(st,2)]; pa.P.skin.color.setHex(sk); pa.P.face.color.setHex(sk);
+      pa.sway = st>=2 && !p.collapsed;
+      pa.think = S.busy && S.cur===p;
+      if(fa) pill(fa.P.plate,p.c.family.who,"rgba(34,48,60,.88)","#dfe8ee");
+    }
+  }
+  const lerpA=(a,b,k)=>a+Math.atan2(Math.sin(b-a),Math.cos(b-a))*k;
+  function step(a,dt,t){
+    const P=a.P; let moving=false;
+    if(a.path&&a.path.length&&!a.fallAt){
+      const [tx,tz]=a.path[0], dx=tx-a.x, dz=tz-a.z, d=Math.hypot(dx,dz), stp=(a.goal&&a.goal.fast?4.4:2.7)*dt*(REDUCED?50:1);
+      if(d<=stp){ a.x=tx; a.z=tz; a.path.shift(); } else { a.x+=dx/d*stp; a.z+=dz/d*stp; }
+      if(d>.01) a.face=Math.atan2(dx,dz); moving=true;
+      if(!a.path.length && a.goal){ a.face=a.goal.face; a.sit=!!a.goal.sit; if(a.goal.door){ a.gone=true; P.g.visible=false; freeSlot(a); } }
+    }
+    P.g.rotation.y=lerpA(P.g.rotation.y,a.face,Math.min(1,dt*10));
+    P.g.position.x=a.x; P.g.position.z=a.z;
+    if(a.fallAt && t-a.fallAt>.8) a.fall=Math.min(1,a.fall+dt*3.2);
+    const sit=!a.fallAt && ((a.sit&&!moving)||!!P.wheel);
+    const sw=moving&&!P.wheel? Math.sin(t*9+a.ph)*.55 : 0;
+    P.legL.rotation.x=sit?-Math.PI/2:sw; P.legR.rotation.x=sit?-Math.PI/2:-sw;
+    P.armL.rotation.x=sit?-.35:-sw*.8; P.armR.rotation.x=sit?-.35:sw*.8;
+    if(a.think||t<a.talkUntil){ P.armR.rotation.x=-.6-Math.abs(Math.sin(t*6))*.4; }
+    let by=sit?-.27:0; if(t<a.talkUntil) by+=Math.abs(Math.sin(t*14))*.05;
+    P.body.position.y=by;
+    if(a.fallAt&&a.fall===0){ P.body.position.y=-.12; P.legL.rotation.x=P.legR.rotation.x=-.5; P.armL.rotation.x=P.armR.rotation.x=-.9; }
+    P.g.position.y=t<a.bounceUntil? Math.abs(Math.sin(t*11))*.28 : 0;
+    P.body.rotation.x = a.fallAt? -Math.PI/2*a.fall : (t<a.leanUntil? .28 : 0);
+    P.body.rotation.z = a.fallAt? (a.fall>0? 0 : Math.sin((t-a.fallAt)*22)*.16) : (a.sway? Math.sin(t*2.3)*.08 : 0);
+    P.plate.position.y = a.fallAt? 1.0 : 2.42;
+    // 對話框
+    let btxt=null, kind="";
+    if(t<a.bubbleUntil){ btxt=a.bubbleText; kind=a.bubbleKind; } else if(a.think){ btxt="……"; }
+    if(btxt){ P.bub.visible=true; pill(P.bub,btxt,kind==="shout"?"#e05a3a":"#f4f8fa",kind==="shout"?"#ffffff":"#14222b"); } else P.bub.visible=false;
+  }
+  function screens(){
+    const name=S&&S.cur? S.cur.c.name : "";
+    if(board.userData.k!==name){ board.userData.k=name; board.userData.redraw(name); }
+    const v=S&&S.cur&&S.cur.vitalsTaken; const k=v? S.cur.c.id+JSON.stringify(v) : "none";
+    if(mon.userData.k!==k){ mon.userData.k=k; mon.userData.redraw(v||null); }
+  }
+  function fit(){
+    const w=host.clientWidth, h=host.clientHeight; if(!w||!h) return;
+    renderer.setSize(w,h,false);
+    let top=0, bot=h;
+    if(getComputedStyle(host).position==="fixed"){
+      const bar=document.querySelector(".bar"), desk=document.querySelector(".desk");
+      if(bar) top=bar.getBoundingClientRect().bottom;
+      if(desk&&!$("app").classList.contains("noanim")){ const dt_=desk.getBoundingClientRect().top; bot=dt_+(h-dt_)*0.35; }
+      if(bot-top<140){ top=0; bot=h; }
+    }
+    const vis=bot-top, sh=h/2-(top+bot)/2, H2=h+2*Math.abs(sh), t16=Math.tan(16*Math.PI/180);
+    const wide=w/vis>2.2, cx=wide?2.8:-.4, half=wide?14.5:11;
+    const hf=Math.atan(t16*w/vis), D=Math.max(13, half/Math.tan(hf)), el_=47*Math.PI/180;
+    cam.fov=2*Math.atan(t16*H2/vis)*180/Math.PI; cam.aspect=w/H2;
+    cam.setViewOffset(w,H2,0,sh>0?2*sh:0,w,h);
+    cam.position.set(cx, .6+D*Math.sin(el_), D*Math.cos(el_)-1.6); cam.lookAt(cx,.6,-1.6); cam.updateProjectionMatrix();
+  }
+  W3.fit=fit;
+  try{ const ro=new ResizeObserver(fit); ro.observe(host); ro.observe(document.querySelector(".desk")); ro.observe(document.querySelector(".bar")); }catch(_){}
+  window.addEventListener("resize",fit);
+  let last=performance.now();
+  function frame(now){
+    requestAnimationFrame(frame);
+    if(host.hidden||!ANIM||document.hidden){ last=now; return; }
+    if(!renderer.domElement.width||renderer.domElement.width<2) fit();
+    const dt=Math.min(.05,(now-last)/1000); last=now; const t=now/1000;
+    if(game!==S){ clearActors(); game=S; W3.bargeP=null; }
+    if(S) syncActors(t);
+    for(const a of actors.values()) if(!a.gone) step(a,dt,t);
+    step(nurseA,dt,t); stepMovers(dt,t); screens();
+    siren.color.setHex(Math.sin(t*5)>0?0xff4040:0x3a5bd0);
+    alarmM.color.setHex(t<W3.alarmUntil && Math.sin(t*12)>0 ? 0xff3b3b : 0x4a2626);
+    renderer.render(scene,cam);
+  }
+  Object.assign(W3,{ok:true,
+    say(key,text,kind){ const a=key==="nurse"?nurseA:actors.get(key); if(!a||!text) return; const t=performance.now()/1000;
+      a.bubbleText=text.length>14?text.slice(0,14)+"…":text; a.bubbleKind=kind||""; a.bubbleUntil=t+(kind==="shout"?3.6:2.8); a.talkUntil=t+1.3; },
+    bounce(key,sec){ const a=actors.get(key); if(a) a.bounceUntil=performance.now()/1000+sec; },
+    lean(){ nurseA.leanUntil=performance.now()/1000+.8; },
+    alarm(){ W3.alarmUntil=performance.now()/1000+4; }
+  });
+  fit(); requestAnimationFrame(frame);
+  return true;
+}
+function syncScene(){
+  const want=ANIM && FONTS_OK && (W3.ok || initW3());
+  const was=$("scene").hidden; $("scene").hidden=!want;
+  $("app").classList.toggle("noanim",!want);
+  if(was&&want&&W3.fit) requestAnimationFrame(()=>W3.fit());
+}
+function play(sel,cls){
+  if(!ANIM||!W3.ok||!S) return;
+  if(sel==="#figN"&&cls==="talk"){ const q=S.cur&&S.cur.log.filter(m=>m.who==="nurse").at(-1); if(q) W3.say("nurse",q.text); }
+  else if(sel==="#figN"&&cls==="lean") W3.lean();
+}
+function animLive(){}
+function animReply(r,p){
+  if(!ANIM||!W3.ok) return;
+  if(r.patient) W3.say("p:"+p.c.id,r.patient);
+  if(r.family){ const k=p.c.family?"f:"+p.c.id:"p:"+p.c.id; W3.say(k,r.family); if(p.c.family&&p.c.family.type==="焦慮施壓型"&&p.anx>50) W3.bounce(k,1); }
+}
+function animVitals(v,lean){ if(lean) play("#figN","lean"); }
+function animSubmit(p,lv){ if(ANIM&&W3.ok) W3.say("nurse",`${p.c.name}，檢傷 ${lv} 級`); }
+function animShout(p){
+  if(!ANIM||!W3.ok||!p) return;
+  const k=p.c.family?"f:"+p.c.id:"p:"+p.c.id; W3.say(k,SHOUT[p.c.id]||"！","shout"); W3.bounce(k,1.6);
+  const f=$("flash"); if(f){ f.classList.remove("go"); void f.offsetWidth; f.classList.add("go"); }
+}
+function intruder(on,p){
+  W3.bargeP= on&&p? p : null;
+  if(on&&ANIM){ const h=$("scene"); h.classList.remove("shake"); void h.offsetWidth; h.classList.add("shake"); setTimeout(()=>h.classList.remove("shake"),1200);
+    if(W3.ok&&p){ const k=p.c.family?"f:"+p.c.id:"p:"+p.c.id; setTimeout(()=>{ W3.say(k,"先幫我們看！","shout"); W3.bounce(k,2.5); },700); } }
+}
+function screenFlash(){ if(!ANIM) return; if(W3.ok) W3.alarm();
+  const h=$("scene"); h.classList.remove("shake"); void h.offsetWidth; h.classList.add("shake"); setTimeout(()=>h.classList.remove("shake"),1200); const d=el("div",{class:"screenflash"}); document.body.append(d); setTimeout(()=>d.remove(),2500); }
+
+/* ============ 名詞解釋 ============ */
+const GLOSS={
+ triage:["檢傷是誰做的？","在台灣急診，第一線的檢傷分類由受過訓練的「檢傷護理師」執行：病人到院後先問診、量生命徵象，決定 TTAS 級數與要去的區域。醫師是在檢傷之後，依級數先後接手看診。這個遊戲裡你扮演檢傷護理師，看診與治療由醫師負責。"],
+ ttas:["TTAS 五級檢傷","台灣急診五級檢傷分類（Taiwan Triage and Acuity Scale）。數字越小越緊急：1 級復甦急救（立即處置）、2 級危急（10 分鐘內看診）、3 級緊急（30 分鐘內）、4 級次緊急（1 小時內）、5 級非緊急（2 小時內）。"],
+ under:["低估與高估","低估是把病人判得比實際輕（真實 2 級你給 3 級），重症可能在候診區等太久而倒下。高估是判得比實際重，會多佔床位和人力，但病人相對安全。所以檢傷的原則是拿不準時寧可判重，遊戲計分也是這樣設計：低估一級只剩 20 分，高估一級還有 70 分。"],
+ vitals:["生命徵象","血壓、心跳、呼吸、血氧、體溫五項客觀數值。病人的話可能淡化或誤會，數值比較不會騙人；在 TTAS 裡，生命徵象異常本身就可能讓級數往上調。量一次花 2 分鐘，紅字代表明顯異常。"],
+ v_BP:["血壓","收縮壓／舒張壓（mmHg），成人常見約 90–140。收縮壓低於 90 可能是休克；非常高（例如 180 以上）又合併胸背痛或手腳無力時要特別警覺。"],
+ v_HR:["心跳","每分鐘心跳次數，成人約 60–100。太快（例如 110 以上）可能是疼痛、發燒、脫水、出血或休克。兒童的正常值比成人高。"],
+ v_RR:["呼吸","每分鐘呼吸次數，成人約 12–20。太快可能是缺氧、嚴重感染，也可能是焦慮造成的過度換氣，要配合其他線索看。"],
+ v_SpO2:["血氧","手指夾測的血氧飽和度，一般 95% 以上。低於 92–94% 表示可能缺氧。"],
+ v_T:["體溫","攝氏，38 度以上算發燒。長者感染時不一定很燒，突然意識混亂反而可能是更重要的訊號。"],
+ beds:["空床：急救 · 診療","急救區 2 張床給 1 級病人，診療區 4 張床給 2 級病人，每張床佔用約 60 分鐘。床滿時，新的重症要等床空出來，所以把不需要的人判太重，會擠掉真正需要的人。3–5 級在候診區等醫師依序看。"],
+ look:["外觀線索","候診卡片左邊的顏色是病人「看起來」的樣子：灰（平穩）→ 黃 → 橙 → 紅（閃爍，非常不妙）。這不是真實級數；安靜的重症可能一直是灰的，直到突然變紅。"],
+ clock:["班次時間","一個班次是遊戲內 90 分鐘（22:00–23:30），約等於現實 15 分鐘。時鐘會自己走；問一句 30 秒、量生命徵象 2 分鐘、送出檢傷 1 分鐘。"],
+ reveal:["揭露率","病人身上的關鍵線索，你問出來的比例（越重要的線索權重越高）。揭露率高卻仍低估，代表「問到了但沒採信」；揭露率低，代表「沒問到」。"]
+};
+function openPop(card){
+  const wasRunning = !!(S && S.running); if(S) S.running=false;
+  const pop=el("div",{class:"pop",role:"dialog","aria-modal":"true"});
+  const close=()=>{ pop.remove(); if(S && wasRunning && !S.ended){ S.running=true; lastReal=performance.now(); } renderLive(); };
+  pop.addEventListener("click",e=>{ if(e.target===pop) close(); });
+  pop.addEventListener("keydown",e=>{ if(e.key==="Escape") close(); });
+  pop.append(card(close)); document.body.append(pop);
+  const b=pop.querySelector("button"); b&&b.focus(); renderLive();
+}
+function showTerm(key){
+  const g=GLOSS[key]; if(!g) return;
+  openPop(close=>el("div",{class:"popcard"},el("h3",{text:g[0]}),el("p",{text:g[1]}),el("div",{},el("button",{class:"btn",onclick:close},"知道了"))));
+}
+function showGlossary(){
+  openPop(close=>el("div",{class:"popcard"},el("h3",{text:"名詞解釋"}),el("p",{class:"note",text:"點任何虛線底的字也能看說明。"}),
+    el("div",{class:"glist"},Object.entries(GLOSS).map(([k,g])=>el("button",{type:"button",onclick:()=>{close();showTerm(k);}},g[0]))),
+    el("div",{},el("button",{class:"btn ghost",onclick:close},"關閉"))));
+}
+document.addEventListener("click",e=>{ const t=e.target.closest&&e.target.closest(".term[data-term]"); if(t){ e.preventDefault(); e.stopPropagation(); showTerm(t.dataset.term);} },true);
+
+/* ============ 偶發事件：檢傷被打斷 ============ */
+const SHOUT={sprain_m20:"他腳腫成這樣了還要等喔？",fever_c8:"小孩燒成這樣，你們到底要不要看？",cut_m55:"我等多久了！割到手也要等一個小時喔？",panic_m35:"我是不是快死了？為什麼還不叫我？",
+  ami_f64:"……護理師，我太太臉色越來越差。",sepsis_m78:"我爸好像越來越叫不醒了，可以先幫他看嗎？",dissect_m50:"他一直冒汗，坐都坐不住了！拜託先看他！",
+  stroke_m72:"他現在連話都講不清楚了！",co_f34:"護理師……我兒子叫不太醒……",hypo_m66:"他好像越來越叫不醒了！要不要先看一下？",asthma_f17:"她嘴唇變紫了！快點啦！",
+  drunk_m42:"他又吐了，可以先處理一下嗎？",fs_c2:"他還在發燒欸，你們到底什麼時候看？",fish_f45:"魚刺還卡著啦！到底要等多久？"};
+const PRESSURE=["sprain_m20","fever_c8","cut_m55","panic_m35","fish_f45","fs_c2","drunk_m42"];
+const INT={
+  ignore:{label:"不理他，繼續問診",cost:0,anx:15,log:w=>`你沒有理會 ${w}`},
+  scold:{label:"喝斥：「請回座位等，不要在這裡吵！」",cost:10,anx:25,log:w=>`你大聲請 ${w} 回座位`},
+  observe:{label:"先過去看病人一眼（1 分鐘）",cost:60,anx:-15},
+  explain:{label:"同理他的焦急，說明依嚴重程度看診（30 秒）",cost:30,anx:-20,log:w=>`你安撫 ${w}，說明會依嚴重程度看診`},
+  letin:{label:"讓他插隊，馬上叫號",cost:0,anx:-10},
+  guard:{label:"請保全協助，帶回候診區（30 秒）",cost:30,anx:15,log:w=>`你請保全把 ${w} 帶回候診區`}
+};
+/* 叫號後第一句話 */
+const ATT_OPEN={ignore:"剛剛叫你都不理，現在才叫我們喔？",scold:"……剛剛那麼兇幹嘛。",observe:"謝謝你剛剛有過來看一下。",explain:"謝謝你剛剛跟我們說明。",letin:"早就該讓我們先看了。",guard:"叫保全是怎樣？我們又不是來鬧的。"};
+/* 給 Claude 的情境說明 */
+const ATT_PROMPT={
+  ignore:"剛才他們朝檢傷台喊，護理師沒有理會。現在被叫到號，態度比較冷、不耐煩，會先抱怨剛剛被忽略。",
+  scold:"剛才他們在候診區被護理師大聲喝斥。現在有點不爽又有點怕，回答簡短保留、不主動多說；家屬可能先酸一句。原本會主動插話的事，這次要被問到才說。",
+  observe:"剛才護理師特地過來看了病人一眼，他們覺得被重視，會先道謝，比較願意配合、講得比較完整。",
+  explain:"剛才護理師先安撫、說明了看診順序，他們情緒比較平穩、願意配合。",
+  letin:"剛才他們硬闖檢傷台，護理師讓他們插隊。他們覺得吵就有用，態度比較強勢。",
+  guard:"剛才保全把他們帶回候診區，他們很不滿、覺得被當成鬧事的人，態度防衛。"
+};
+function checkEvents(){
+  if(!S.running||S.busy||S.ended||document.querySelector(".pop")||!S.cur) return;
+  if(S.lastInt!=null && S.t-S.lastInt<240) return;   // 兩次打斷至少隔 4 分鐘（遊戲時間）
+  const waiting=S.pts.filter(p=>p.status==="waiting"&&S.cur!==p);
+  for(const p of waiting){
+    const w=(S.t-arriveSec(p))/60;
+    const quietWorse = !p.c.loud && stageOf(p)>=1 && p.c.family;
+    if(!p.shouted && SHOUT[p.c.id] && (quietWorse || (p.c.loud && w>=15)) && Math.random()<0.025){ p.shouted=true; interrupt(p,"shout"); return; }
+  }
+  if(S.barge && !S.bargeDone){
+    const p=waiting.find(p=>PRESSURE.includes(p.c.id) && (S.t-arriveSec(p))/60>=10 && !p.shouted);
+    if(p && Math.random()<0.03){ S.bargeDone=true; p.shouted=true; interrupt(p,"barge"); }
+  }
+}
+function interrupt(p,kind){
+  const who=p.c.family? `${p.c.name}的${p.c.family.who}` : p.c.name;
+  const ev={kind,name:who,t:S.t,choice:null,quiet:!p.c.loud,pid:p.c.id}; S.events.push(ev); S.lastInt=S.t;
+  if(kind==="barge") intruder(true,p); else animShout(p);
+  const waited=Math.round((S.t-arriveSec(p))/60);
+  const line= kind==="barge"? `${who}直接走到檢傷台前拍桌：「我們等 ${waited} 分鐘了！先幫我們看！」`
+                            : `${who}從候診區朝檢傷台大喊：「${SHOUT[p.c.id]||"我們到底還要等多久？"}」`;
+  const keys= kind==="barge"? ["explain","observe","letin","scold","guard"] : ["ignore","scold","observe","explain"];
+  const cur=S.cur;
+  openPop(close=>el("div",{class:"popcard alarm"},
+    el("h3",{text:kind==="barge"?"有人闖到檢傷台":"檢傷被打斷了"}),
+    el("p",{text:`${clockStr(S.t)}　${line}`}),
+    el("p",{class:"note",text:`你正在問 ${cur?cur.c.name:"別的病人"}。你要怎麼做？`}),
+    el("div",{class:"choices"},keys.map(k=>el("button",{class:"btn ghost",onclick:()=>{
+      const c=INT[k]; ev.choice=k; p.attitude=k; p.attSaid=false;
+      p.anx=Math.max(0,Math.min(100,p.anx+c.anx));
+      close(); intruder(false);
+      if(k==="letin"){ callPatient(p); return; }
+      if(k==="observe"){ cur&&cur.log.push({who:"sys",text:`你走到候診區看了 ${p.c.name} 一眼：${lookText(p)}${stageOf(p)>=1?"（看起來比剛到時差）":""}`}); play("#figN","lean"); }
+      else if(c.log && cur) cur.log.push({who:"sys",text:c.log(who)});
+      if(c.cost) advance(c.cost); render();
+    }},c_label(k))))));
+}
+const c_label=k=>INT[k].label;
+function bargeIn(p){ interrupt(p,"barge"); }
+
+/* ============ 啟動 ============ */
+$("askForm").addEventListener("submit",e=>{e.preventDefault(); const v=$("askInput").value; $("askInput").value=""; ask(v);});
+$("vitalBtn").addEventListener("click",takeVitals);
+$("lookBtn").addEventListener("click",look);
+$("triageForm").addEventListener("submit",submitTriage);
+$("glossBtn").addEventListener("click",showGlossary);
+$("aiBtn").addEventListener("click",showAISettings);
+$("endBtn").addEventListener("click",()=>{
+  if(!S||S.ended||!$("overlay").hidden||document.querySelector(".pop")) return;
+  const left=S.pts.filter(p=>!(p.triage&&!p.triage.forced)).length;
+  openPop(close=>el("div",{class:"popcard"},el("h3",{text:"提早交班？"}),
+    el("p",{text:`現在交班會直接進入結算。${left?`還有 ${left} 位病人沒檢傷（含還沒到院的），已到院但沒檢傷的算 0 分。`:"所有病人都已檢傷。"}`}),
+    el("div",{class:"choices"},el("button",{class:"btn",onclick:()=>{close();endShift();}},"確定交班，看結算"),el("button",{class:"btn ghost",onclick:close},"繼續值班"))));
+});
+$("animBtn").setAttribute("aria-pressed",String(ANIM));
+$("animBtn").addEventListener("click",()=>{ ANIM=!ANIM; try{localStorage.setItem("np_anim",ANIM?"1":"0");}catch(_){} $("animBtn").setAttribute("aria-pressed",String(ANIM)); sceneHold=0; render(); });
+$("pauseBtn").addEventListener("click",()=>{ if(!S||S.ended||!$("overlay").hidden||document.querySelector(".pop")) return; S.running=!S.running; lastReal=performance.now(); renderLive(); });
+$("speedBtn").addEventListener("click",()=>{ if(!S) return; S.speed=S.speed===1?2:1; $("speedBtn").setAttribute("aria-pressed",String(S.speed===2)); });
+
+newGame(); buildQuick(); render(); showTitle(); startLoop(); S.running=false;
+(async()=>{
+  const hasRuntime=!!(window.claude && window.claude.use);
+  try{ sample = hasRuntime ? await window.claude.use("sample") : null; }catch(_){ sample=null; }
+  aiState = sample? "ai" : "offline";
+  if(!sample && hasRuntime) aiOfflineMsg="目前為離線腳本模式：這個瀏覽器環境無法使用 Claude（無痕視窗、封鎖第三方 Cookie 時常見）。請用一般視窗登入 claude.ai 後重新整理。";
+  $("aiBtn").hidden = !!window.claude;
+  refreshAINote();
+  renderLive();
+})();
+</script>
+
+</body>
+</html>
