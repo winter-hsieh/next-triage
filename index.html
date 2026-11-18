@@ -991,7 +991,7 @@ function biasSlices(){
 /* 回饋：送到作者的 Google Apps Script（網頁應用程式網址，結尾是 /exec）
    在 claude.ai 裡平台會擋掉背景傳送，所以改用新分頁開啟同一個網址（打開時就已存好）；
    用 HTML 檔或其他網站打開時，直接在背景送出。 */
-const FEEDBACK_URL="";
+const FEEDBACK_URL="https://script.google.com/macros/s/AKfycbxpusDim2qnqmUtIpS0_JCGQ5c3XXB0fipkyDv2BJLdh0AOiBuczB_EWf6fmpI7DrSg/exec";
 /* ============ 自備 API key（GitHub 或 HTML 檔版本才有；claude.ai 裡由 Claude 扮演） ============ */
 const BYOK_STORE="np_ai";
 const PROVIDERS={gemini:{name:"Gemini",model:"gemini-2.5-flash"},claude:{name:"Claude",model:"claude-opus-5-5"}};
