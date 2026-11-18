@@ -799,6 +799,10 @@ function expandQ(q){ let x=q; for(const [re,add] of SYN) if(re.test(q)) x+=" "+a
 /* 沒有「發作時間」線索的病例，被問到時的一般回答 */
 const ONSET={sprain_m20:"大概一個小時前打球的時候，落地那一下就很痛了！",cut_m55:"半個小時前切菜，一下子就割到了啦。",
   fish_f45:"晚上七點多吃飯的時候，一吞就卡住了，到現在都還在。",drunk_m42:"我哪知道……就剛剛……出來的時候吧……"};
+/* 沒有「病史」線索的病例，被問到時的一般回答 */
+const HIST={sprain_m20:{text:"沒有啦，我身體很好，沒在吃藥。"},fever_c8:{fam:true,text:"她沒有什麼病，也沒有過敏，疫苗都有打。"},
+  panic_m35:{text:"沒有什麼病……上個月檢查都說正常，但我真的很不舒服！"},fish_f45:{text:"沒什麼病啦，就血壓有一點高，沒在吃藥。"},
+  fs_c2:{fam:true,text:"他沒有什麼病，也沒有過敏，疫苗都有照時間打。"},co_f34:{text:"我沒有什麼病，也沒在吃藥。兒子也很健康。"}};
 const EMPATHY_REPLY=["……謝謝你。","好，我知道了，謝謝。","嗯……聽你這樣說比較安心一點。","謝謝，不好意思麻煩你們。"];
 function offlineReply(p,q0){
   const q=expandQ(q0);
@@ -813,6 +817,7 @@ function offlineReply(p,q0){
     if(q0.trim().length<2) pLines.push("嗯？你說什麼？");
     else if(kind) pLines.push(EMPATHY_REPLY[Math.floor(Math.random()*EMPATHY_REPLY.length)]);
     else if(ONSET[p.c.id] && /突然|開始|多久|什麼時候|慢慢|幾點/.test(q0)) pLines.push(ONSET[p.c.id]);
+    else if(/病史|吃藥|藥|慢性|過敏/.test(q0) && !p.c.clues.some(cl=>/病史|藥/.test(cl.when||""))){ const h=HIST[p.c.id]; if(h&&h.fam) fLines.push(h.text); else pLines.push(h?h.text:"沒有什麼病啦，也沒有在吃藥。"); }
     else if(/幾分|分數|0到10|1到10|多痛|痛不痛/.test(q0)) pLines.push(p.c.loud?"十分！很痛啦！":"……大概五、六分吧，還忍得住。");
     else { const f=p.c.filler; let i=Math.floor(Math.random()*f.length); if(f.length>1&&i===p.lastFill) i=(i+1)%f.length; p.lastFill=i; pLines.push(f[i]); }
   }
@@ -1009,7 +1014,7 @@ function biasSlices(){
 const FEEDBACK_URL="https://script.google.com/macros/s/AKfycbxpusDim2qnqmUtIpS0_JCGQ5c3XXB0fipkyDv2BJLdh0AOiBuczB_EWf6fmpI7DrSg/exec";
 /* ============ 自備 API key（GitHub 或 HTML 檔版本才有；claude.ai 裡由 Claude 扮演） ============ */
 const BYOK_STORE="np_ai";
-const PROVIDERS={gemini:{name:"Gemini",model:"gemini-2.5-flash"},claude:{name:"Claude",model:"claude-opus-5-5"}};
+const PROVIDERS={gemini:{name:"Gemini",model:"gemini-3.8-flash"},claude:{name:"Claude",model:"claude-opus-5-5"}};
 let byok=null, byokBroken=false;
 try{ byok=JSON.parse(localStorage.getItem(BYOK_STORE)||"null"); }catch(_){ byok=null; }
 function byokReady(){ return !window.claude && !byokBroken && !!(byok && byok.key && PROVIDERS[byok.provider]); }
@@ -1036,7 +1041,17 @@ async function byokCall(prompt,cfg){
       method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{responseMimeType:"application/json"}})});
     const j=await r.json().catch(()=>({}));
-    if(!r.ok) throw httpErr(r.status, j.error&&j.error.message);
+    if(!r.ok){
+      const msg=(j.error&&j.error.message)||"";
+      // 型號被停用時，Google 會在訊息裡建議新型號：自動改用並重試一次
+      const sug=msg.match(/use models\/([\w.\-]+)/i);
+      if(sug && !cfg._retried && /no longer available|not found|deprecated/i.test(msg)){
+        PROVIDERS.gemini.model=sug[1];
+        if(cfg===byok && byok.model){ byok.model=""; try{ localStorage.setItem(BYOK_STORE,JSON.stringify(byok)); }catch(_){} }
+        return byokCall(prompt,{...cfg,model:sug[1],_retried:true});
+      }
+      throw httpErr(r.status, msg);
+    }
     const parts=(j.candidates&&j.candidates[0]&&j.candidates[0].content&&j.candidates[0].content.parts)||[];
     const t=parts.map(x=>x.text||"").join("");
     if(!t) throw {code:"empty_completion",message:"沒有回應"};
