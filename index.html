@@ -133,6 +133,9 @@ select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--r)
 .pop{position:fixed;inset:0;z-index:40;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--bg) 72%,transparent);padding:16px max(16px,env(safe-area-inset-right,0px)) 16px max(16px,env(safe-area-inset-left,0px))}
 .popcard{background:var(--panel2);border:1px solid var(--accent);border-radius:10px;max-width:460px;width:100%;padding:18px 20px;display:flex;flex-direction:column;gap:10px;max-height:85vh;overflow-y:auto}
 .popcard.alarm{border-color:var(--crit)}
+.popcard.nudge{animation:nudge .3s}
+@keyframes nudge{25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}
+@media (prefers-reduced-motion:reduce){.popcard.nudge{animation:none}}
 .popcard h3{margin:0;font-size:16px}
 .popcard p{margin:0;line-height:1.75}
 .popcard .note{color:var(--muted)}
@@ -1707,9 +1710,14 @@ function openPop(card){
   const wasRunning = !!(S && S.running); if(S) S.running=false;
   const pop=el("div",{class:"pop",role:"dialog","aria-modal":"true"});
   const close=()=>{ pop.remove(); if(S && wasRunning && !S.ended){ S.running=true; lastReal=performance.now(); } renderLive(); };
-  pop.addEventListener("click",e=>{ if(e.target===pop) close(); });
-  pop.addEventListener("keydown",e=>{ if(e.key==="Escape") close(); });
-  pop.append(card(close)); document.body.append(pop);
+  const c=card(close), force=c.dataset.force==="1";   // 事件視窗：一定要選一個選項才會關
+  if(!force){
+    pop.addEventListener("click",e=>{ if(e.target===pop) close(); });
+    pop.addEventListener("keydown",e=>{ if(e.key==="Escape") close(); });
+  } else {
+    pop.addEventListener("click",e=>{ if(e.target===pop){ c.classList.remove("nudge"); void c.offsetWidth; c.classList.add("nudge"); } });
+  }
+  pop.append(c); document.body.append(pop);
   const b=pop.querySelector("button"); b&&b.focus(); renderLive();
 }
 function showTerm(key){
@@ -1822,7 +1830,7 @@ function interrupt(p,kind){
                             : `${who}從候診區朝檢傷台大喊：「${SHOUT[p.c.id]||"我們到底還要等多久？"}」`;
   const keys= kind==="barge"? ["explain","observe","letin","scold","guard"] : ["ignore","scold","observe","explain"];
   const cur=S.cur;
-  openPop(close=>el("div",{class:"popcard alarm"},
+  openPop(close=>el("div",{class:"popcard alarm","data-force":"1"},
     el("h3",{text:kind==="barge"?"有人闖到檢傷台":"檢傷被打斷了"}),
     el("p",{text:`${clockStr(S.t)}　${line}`}),
     el("p",{class:"note",text:`你正在問 ${cur?cur.c.name:"別的病人"}。你要怎麼做？`}),
