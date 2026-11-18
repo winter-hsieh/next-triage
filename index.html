@@ -156,6 +156,14 @@ button.btn:disabled{opacity:.4}
 .aif input,.aif select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--r);padding:8px;color:var(--fg);font-size:14px}
 .popcard a{color:var(--accent)}
 .btnrow{display:flex;flex-wrap:wrap;gap:8px}
+.tut-hl{outline:3px solid var(--accent)!important;outline-offset:3px;animation:tutpulse 1.4s ease-in-out infinite}
+@keyframes tutpulse{50%{outline-color:color-mix(in srgb,var(--accent) 35%,transparent)}}
+.tut-card{position:fixed;z-index:45;width:min(360px,calc(100vw - 32px));background:var(--panel2);border:1px solid var(--accent);border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.tut-card h3{margin:0;font-size:16px}
+.tut-card p{margin:0;line-height:1.75}
+.tut-card .step{font-size:11px;letter-spacing:.14em;color:var(--muted)}
+.tut-card.center{left:50%;top:50%;transform:translate(-50%,-50%)}
+@media (prefers-reduced-motion:reduce){.tut-hl{animation:none}}
 .legend{display:flex;flex-wrap:wrap;gap:6px 14px;font-size:13px}
 .legend b{font-family:var(--mono)}
 
@@ -1297,7 +1305,7 @@ function showTitle(){
     el("div",{class:"ttasrow"},[1,2,3,4,5].map(n=>el("span",{},el("span",{class:"chip c"+n,text:n})," "+LVNAME[n]+"・"+(n===1?"立即":n<=3?ALLOWED[n]+" 分內":n===4?"1 小時內":"2 小時內")))),
     el("p",{text:"看不懂的詞：點虛線底的字，或右上角「名詞解釋」。"}),
     el("p",{id:"aiNote",text: aiNoteText()}),
-    el("div",{class:"btnrow"},el("button",{class:"btn",onclick:()=>{hideOverlay();S.running=true;startLoop();render();}},"開始值班"),window.claude?null:el("button",{class:"btn ghost",type:"button",onclick:showAISettings},"AI 設定")),
+    el("div",{class:"btnrow"},el("button",{class:"btn",onclick:()=>startShift(false)},"開始值班"),el("button",{class:"btn ghost",type:"button",onclick:()=>startShift(true)},"新手教學"),window.claude?null:el("button",{class:"btn ghost",type:"button",onclick:showAISettings},"AI 設定")),
     el("p",{class:"disc",text:"分級依據衛福部急診五級檢傷分類基準簡化。案例與人物皆為虛構，如有雷同，純屬巧合。"})
   ));
 }
@@ -1682,9 +1690,60 @@ function showTerm(key){
   const g=GLOSS[key]; if(!g) return;
   openPop(close=>el("div",{class:"popcard"},el("h3",{text:g[0]}),el("p",{text:g[1]}),el("div",{},el("button",{class:"btn",onclick:close},"知道了"))));
 }
+/* ============ 新手教學 ============ */
+const TUT=[
+  {sel:".bar", title:"班次時鐘", text:"最左邊是遊戲裡的時間，一開始就會一直往前走。病人在候診區等越久，有些人會越來越嚴重。旁邊依序是剩下幾分鐘、空床數、已經檢傷幾位。"},
+  {sel:"main.desk > section:nth-of-type(1)", title:"① 點病人，叫號", text:"病人到院後會排在這裡。點一張卡片，就是叫這位病人來問診。卡片左邊的顏色是他「看起來」的樣子：灰色還好，黃、橙、紅越來越不妙。右上角是他等了多久。"},
+  {sel:"main.desk > section:nth-of-type(2)", title:"② 問診", text:"叫號後，對話會出現在這裡。病人會先說哪裡不舒服，你可以點下面的快捷問句，或自己打字問。每問一句會花 30 秒。按「量生命徵象」（2 分鐘）可以看血壓、心跳等數值。"},
+  {sel:"main.desk > section:nth-of-type(3)", title:"③ 給級數、送出", text:"量過的數值會出現在上面，紅字代表異常。問得差不多了，選 1 到 5 級（1 最緊急、5 最不急），再按「完成檢傷」。系統不會當場告訴你對錯，結算時才會揭曉。"},
+  {sel:"#levels", title:"拿不準時，判重一點", text:"判太重只會少一點分；判太輕會扣很多分，嚴重的話病人會在候診區倒下。不確定的時候，往緊急的那邊選。"},
+  {sel:"#glossBtn", title:"看不懂就點這裡", text:"「名詞解釋」可以查血壓、TTAS 這些詞，畫面上有虛線的字也能點。想結束可以按「提早結算」。看說明時遊戲時間會暫停。"},
+  {sel:null, title:"開始值班吧！", text:"第一位病人已經在候診佇列了，點他的卡片開始問診。結算時會告訴你每位病人的真實級數，還有你漏問了哪一句。"}
+];
+function tutSeen(){ try{ return localStorage.getItem("np_tut")==="1"; }catch(_){ return false; } }
+function startShift(withTut){
+  hideOverlay(); advance(1); render();
+  const go=()=>{ S.running=true; startLoop(); lastReal=performance.now(); render(); };
+  if(withTut || !tutSeen()) runTutorial(go); else go();
+}
+function runTutorial(after){
+  if(document.querySelector(".tut-card")) return;
+  const wasRunning=!!(S&&S.running); if(S) S.running=false;
+  let i=0, hl=null;
+  const card=el("div",{class:"tut-card",role:"dialog","aria-modal":"false","aria-label":"新手教學"});
+  document.body.append(card);
+  const finish=()=>{ if(hl) hl.classList.remove("tut-hl"); card.remove(); window.removeEventListener("resize",place);
+    try{ localStorage.setItem("np_tut","1"); }catch(_){}
+    if(after) after(); else if(wasRunning&&S&&!S.ended){ S.running=true; lastReal=performance.now(); } renderLive(); };
+  function place(){
+    const st=TUT[i], t=st.sel&&document.querySelector(st.sel);
+    card.classList.toggle("center",!t); card.style.left=card.style.top="";
+    if(!t) return;
+    const r=t.getBoundingClientRect(), cw=card.offsetWidth, ch=card.offsetHeight, m=12, vw=innerWidth, vh=innerHeight;
+    let top = r.bottom+m+ch<vh ? r.bottom+m : (r.top-m-ch>0 ? r.top-m-ch : Math.max(m,Math.min(vh-ch-m, r.top+m)));
+    let left = Math.max(m, Math.min(vw-cw-m, r.left + r.width/2 - cw/2));
+    if(r.height>vh*0.45 && r.width<vw*0.6){ top=Math.max(m,Math.min(vh-ch-m, r.top+40)); left = r.right+m+cw<vw ? r.right+m : (r.left-m-cw>0 ? r.left-m-cw : left); }
+    card.style.left=left+"px"; card.style.top=top+"px";
+  }
+  function show(){
+    if(hl) hl.classList.remove("tut-hl");
+    const st=TUT[i]; hl=st.sel&&document.querySelector(st.sel); if(hl){ hl.classList.add("tut-hl"); hl.scrollIntoView({block:"nearest"}); }
+    const last=i===TUT.length-1;
+    card.replaceChildren(el("div",{class:"step",text:`新手教學 ${i+1} / ${TUT.length}`}),el("h3",{text:st.title}),el("p",{text:st.text}),
+      el("div",{class:"btnrow"},
+        i>0? el("button",{class:"btn ghost",type:"button",onclick:()=>{i--;show();}},"上一步"):null,
+        el("button",{class:"btn",type:"button",onclick:()=>{ if(last) finish(); else { i++; show(); } }}, last?"開始！":"下一步"),
+        last? null : el("button",{class:"btn ghost",type:"button",onclick:finish},"跳過教學")));
+    requestAnimationFrame(place); card.querySelector(".btn").focus();
+  }
+  window.addEventListener("resize",place);
+  card.addEventListener("keydown",e=>{ if(e.key==="Escape") finish(); });
+  show();
+}
 function showGlossary(){
   openPop(close=>el("div",{class:"popcard"},el("h3",{text:"名詞解釋"}),el("p",{class:"note",text:"點任何虛線底的字也能看說明。"}),
     el("div",{class:"glist"},Object.entries(GLOSS).map(([k,g])=>el("button",{type:"button",onclick:()=>{close();showTerm(k);}},g[0]))),
+    el("div",{},el("button",{class:"btn ghost",type:"button",onclick:()=>{close();runTutorial();}},"再看一次新手教學")),
     el("div",{},el("button",{class:"btn ghost",onclick:close},"關閉"))));
 }
 document.addEventListener("click",e=>{ const t=e.target.closest&&e.target.closest(".term[data-term]"); if(t){ e.preventDefault(); e.stopPropagation(); showTerm(t.dataset.term);} },true);
