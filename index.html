@@ -155,6 +155,8 @@ button.btn:disabled{opacity:.4}
 .aif{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--muted)}
 .aif input,.aif select{background:var(--bg);border:1px solid var(--line2);border-radius:var(--r);padding:8px;color:var(--fg);font-size:14px}
 .popcard a{color:var(--accent)}
+.guide{background:var(--bg);border:1px solid var(--line2);border-radius:var(--r);padding:10px 12px;display:flex;flex-direction:column;gap:6px;font-size:13px}
+.guide ol{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px;line-height:1.7}
 .btnrow{display:flex;flex-wrap:wrap;gap:8px}
 .tut-hl{outline:3px solid var(--accent)!important;outline-offset:3px;animation:tutpulse 1.4s ease-in-out infinite}
 @keyframes tutpulse{50%{outline-color:color-mix(in srgb,var(--accent) 35%,transparent)}}
@@ -1059,6 +1061,30 @@ function showAISettings(){
     const updHint=()=>{ const g=prov.value==="gemini"; model.placeholder="不填就用預設："+PROVIDERS[prov.value].model;
       hint.replaceChildren(...(g? ["到 ",el("a",{href:"https://aistudio.google.com/apikey",target:"_blank",rel:"noopener"},"Google AI Studio")," 用 Google 帳號免費申請，不用綁信用卡；沒有綁付款方式就不會被收費。"]
         : ["到 ",el("a",{href:"https://console.anthropic.com/settings/keys",target:"_blank",rel:"noopener"},"Anthropic Console")," 建立 key，會依用量收費。建議另開一把專用的 key 並設定花費上限；想省錢可以在下面填 claude-haiku-5-5。"])); };
+    /* 不知道怎麼建立 API？請點這 */
+    const guide=el("div",{class:"guide",hidden:true});
+    const fillGuide=()=>{ const g=prov.value==="gemini";
+      guide.replaceChildren(...(g? [
+        el("b",{text:"取得 Gemini API key（約 2 分鐘，免費）"}),
+        el("ol",{},
+          el("li",{},"打開 ",el("a",{href:"https://aistudio.google.com/apikey",target:"_blank",rel:"noopener"},"Google AI Studio"),"，用你的 Google 帳號登入。第一次進去如果要你同意條款，按同意。"),
+          el("li",{text:"按「建立 API 金鑰」（英文介面是 Create API key）。如果問要放在哪個專案，選預設的或讓它自動建立就好。"}),
+          el("li",{text:"畫面會出現一串以 AIza 開頭的文字，那就是 key。按旁邊的複製。"}),
+          el("li",{text:"回到這裡，貼進下面的「API key」欄，按「測試」，看到「可以用！」再按「儲存」。"})),
+        el("p",{class:"note",text:"不用綁信用卡；沒有綁付款方式就不會被收費。Google 可能規定要年滿 18 歲的帳號才能申請，未滿的話用離線模式玩就好。"}),
+        el("p",{class:"note",text:"測試失敗？常見原因：key 沒複製完整、前後多了空白，或免費額度暫時用完（隔一陣子再試）。"})
+      ] : [
+        el("b",{text:"取得 Claude API key（需付費）"}),
+        el("ol",{},
+          el("li",{},"打開 ",el("a",{href:"https://console.anthropic.com/settings/keys",target:"_blank",rel:"noopener"},"Anthropic Console")," 並登入（這是開發者帳號，跟 claude.ai 的聊天帳號分開）。"),
+          el("li",{text:"在帳單（Billing）頁面先儲值，沒有餘額 key 無法使用。建議同時設定每月花費上限。"}),
+          el("li",{text:"回到 API Keys 頁面，按「Create Key」，取個名字（例如「下一位遊戲」），複製以 sk-ant- 開頭的 key。這串只會顯示一次。"}),
+          el("li",{text:"回到這裡，貼進下面的「API key」欄，按「測試」，看到「可以用！」再按「儲存」。"})),
+        el("p",{class:"note",text:"不想花錢的話，上面「服務」改選 Gemini。"})
+      ])); };
+    const howBtn=el("button",{class:"term",style:"color:var(--accent);font-weight:700",type:"button","aria-expanded":"false",onclick:()=>{ guide.hidden=!guide.hidden; howBtn.setAttribute("aria-expanded",String(!guide.hidden)); if(!guide.hidden) fillGuide(); }},"請點這");
+    const howRow=el("p",{class:"note"},"不知道怎麼建立 API？",howBtn);
+    prov.addEventListener("change",()=>{ if(!guide.hidden) fillGuide(); });
     prov.addEventListener("change",updHint); updHint();
     const cfg=()=>({provider:prov.value,key:key.value.trim(),model:model.value.trim()});
     const test=el("button",{class:"btn ghost",type:"button",onclick:async()=>{ const c=cfg(); if(!c.key){ res.textContent="請先貼上 key。"; return; }
@@ -1069,7 +1095,7 @@ function showAISettings(){
     const clear=el("button",{class:"btn ghost",type:"button",onclick:()=>{ byok=null; byokBroken=false; try{ localStorage.removeItem(BYOK_STORE); }catch(_){} close(); refreshAINote(); flash("已清除 key"); }},"清除 key");
     return el("div",{class:"popcard"},el("h3",{text:"AI 設定"}),
       el("p",{text:"填入你自己的 API key，病人就會由 AI 即時扮演，費用或額度算在你自己的帳號。不填也能玩（離線模式）。"}),
-      el("label",{class:"aif"},"服務",prov), hint, el("label",{class:"aif"},"API key",key), el("label",{class:"aif"},"模型（選填）",model),
+      el("label",{class:"aif"},"服務",prov), hint, howRow, guide, el("label",{class:"aif"},"API key",key), el("label",{class:"aif"},"模型（選填）",model),
       el("p",{class:"note",text:"key 只存在這台裝置的瀏覽器裡，遊戲直接連到 Google 或 Anthropic，不會傳給作者。在公用電腦玩完請按「清除 key」。"}),
       el("div",{class:"btnrow"},test,save,clear,el("button",{class:"btn ghost",type:"button",onclick:close},"關閉")), res);
   });
