@@ -526,7 +526,7 @@ const CASES = [
   clues:[
     {id:"sob",label:"喘",w:1,vol:true,who:"patient",fact:"很喘"},
     {id:"overuse",label:"一小時內用急救吸入劑五次無效",w:3,who:"patient",fact:"一小時內吸了五次急救吸入劑，沒有改善",when:"問到吸藥、藥、幾次、有沒有效",kw:["吸藥","藥","吸入","幾次","噴","有效"],line:"吸……五次了……沒什麼用……",ask:"藥吸了幾次？有效嗎？"},
-    {id:"prior_icu",label:"曾因氣喘住加護病房",w:3,who:"patient",fact:"國三時因為氣喘住過加護病房",when:"問到以前、住院、最嚴重的一次、病史",kw:["以前","住院","加護","插管","病史","類似","嚴重"],line:"國三……有住過……加護病房……",ask:"以前發作最嚴重時有住院嗎？"},
+    {id:"prior_icu",label:"曾因氣喘住加護病房",w:3,who:"patient",fact:"國三時因為氣喘住過加護病房",when:"問到以前、住院、最嚴重的一次、病史",kw:["以前","住院","加護","插管","病史","類似","最嚴重"],line:"國三……有住過……加護病房……",ask:"以前發作最嚴重時有住院嗎？"},
     {id:"trigger",label:"吸到燒金紙的煙誘發",w:1,who:"patient",fact:"路上有人燒金紙，吸到煙開始",when:"問到怎麼開始、什麼時候、煙",kw:["怎麼開始","什麼時候","煙","多久","開始"],line:"路上……有人燒金紙……煙很大……",ask:"怎麼開始喘的？"},
     {id:"cant_lie",label:"無法平躺",w:2,who:"patient",fact:"躺下更喘，只能坐著前傾",when:"問到躺、姿勢",kw:["躺","姿勢","坐","睡"],line:"不能躺……躺下……更喘……",ask:"可以躺平嗎？"},
     {id:"words_only",label:"說話無法成句（同學補充）",w:2,who:"family",fact:"同學說她平常講話很快，現在一句話講不完、嘴唇有點紫",when:"問到平常、講話，或問同學",kw:["平常","講話","說話","同學","你覺得","嘴唇"],line:"她平常講話超快的，現在一句話都講不完，你看她嘴唇！",ask:"她平常講話也這樣嗎？"}],
@@ -628,6 +628,16 @@ const EXTRA={
   dissect_m50:{name:"李建宏",job:"貨運司機",story:"跑長途貨運，抽菸、高血壓多年但嫌麻煩不吃藥。今晚在家看電視時突然背痛像被撕開，太太堅持要來。"}
 };
 for(const c of CASES) Object.assign(c, EXTRA[c.id]||{});
+/* 離線模式：依線索的觸發說明自動補關鍵字，讓快捷問句在每個病例都對得到 */
+for(const c of CASES) for(const cl of c.clues){ if(!cl.kw||!cl.when) continue;
+  const add=[];
+  if(/什麼時候|多久|怎麼開始|突然|開始/.test(cl.when)) add.push("突然","開始","慢慢","多久");
+  if(/病史|吃藥|慢性|藥/.test(cl.when)) add.push("病史","吃藥","藥");
+  if(/還有哪裡|其他地方|延伸|跑/.test(cl.when)) add.push("還有哪裡","其他地方");
+  if(/感覺|怎麼痛|形容/.test(cl.when)) add.push("感覺","怎麼痛");
+  if(/平常/.test(cl.when)) add.push("平常");
+  for(const k of add) if(!cl.kw.includes(k)) cl.kw.push(k);
+}
 /* 誰來回答：說不清楚的病人由家屬代訴 */
 const PROXY={
   sepsis_m78:{proxy:"病人意識混亂，只會講台語短句、答非所問；發作經過、病史、平常的樣子都由女兒回答。"},
@@ -786,6 +796,9 @@ const SYN=[[/流汗|出汗|盜汗|濕/,"冷汗 汗"],[/疾病史|過去病史|�
   [/月事|大姨媽|經痛|經期/,"月經 生理期"],[/喝了酒|飲酒|喝酒|酒精/,"酒 喝酒"],[/家人|旁邊的人|陪你來|陪同/,"家人 你覺得"],
   [/放射|延伸|轉移|其他地方|別的地方|其他部位|哪裡還/,"其他地方 延伸 跑 還有"],[/突然|一下子|慢慢/,"突然 開始"],[/心跳|心悸/,"心悸 心跳"],[/走路|站起來|起身/,"走 站"]];
 function expandQ(q){ let x=q; for(const [re,add] of SYN) if(re.test(q)) x+=" "+add; return x; }
+/* 沒有「發作時間」線索的病例，被問到時的一般回答 */
+const ONSET={sprain_m20:"大概一個小時前打球的時候，落地那一下就很痛了！",cut_m55:"半個小時前切菜，一下子就割到了啦。",
+  fish_f45:"晚上七點多吃飯的時候，一吞就卡住了，到現在都還在。",drunk_m42:"我哪知道……就剛剛……出來的時候吧……"};
 const EMPATHY_REPLY=["……謝謝你。","好，我知道了，謝謝。","嗯……聽你這樣說比較安心一點。","謝謝，不好意思麻煩你們。"];
 function offlineReply(p,q0){
   const q=expandQ(q0);
@@ -799,6 +812,7 @@ function offlineReply(p,q0){
   if(!pLines.length && !fLines.length){
     if(q0.trim().length<2) pLines.push("嗯？你說什麼？");
     else if(kind) pLines.push(EMPATHY_REPLY[Math.floor(Math.random()*EMPATHY_REPLY.length)]);
+    else if(ONSET[p.c.id] && /突然|開始|多久|什麼時候|慢慢|幾點/.test(q0)) pLines.push(ONSET[p.c.id]);
     else if(/幾分|分數|0到10|1到10|多痛|痛不痛/.test(q0)) pLines.push(p.c.loud?"十分！很痛啦！":"……大概五、六分吧，還忍得住。");
     else { const f=p.c.filler; let i=Math.floor(Math.random()*f.length); if(f.length>1&&i===p.lastFill) i=(i+1)%f.length; p.lastFill=i; pLines.push(f[i]); }
   }
@@ -893,7 +907,8 @@ async function ask(q){
         aiState="offline"; flash("無法使用 Claude，已切換為離線腳本模式");
       } else if(e&&e.code==="bad_key"){ byokBroken=true; flash("API key 無效，先改用離線模式（可到「AI 設定」更新）"); refreshAINote(); }
       else if(e&&e.code==="rate_limited"){ flash("AI 呼叫太頻繁或額度用完，這一回合改用離線腳本"); }
-      else if(e&&!sample){ flash("AI 沒有回應（"+errText(e)+"），這一回合改用離線腳本"); }
+      if(e&&e.code!=="bad_key"&&!sample) flash("AI 沒有回應，這一句改用離線回答");
+      if(e&&!sample) p.log.push({who:"sys",text:`⚠ AI 沒有回應（${errText(e)}），這一句改用離線回答`});
       r=null;
     }finally{ S.busy=false; lastReal=performance.now(); }
   }
