@@ -1024,16 +1024,30 @@ function parseLooseJSON(t){
   const a=t.indexOf("{"), b=t.lastIndexOf("}"); if(a>=0&&b>a){ try{ return JSON.parse(t.slice(a,b+1)); }catch(_){} }
   throw {code:"invalid_json",message:"回應格式不對"};
 }
-function httpErr(st,m){ if(st===400&&/api.?key/i.test(m||"")) st=401; return {code: st===401||st===403?"bad_key": st===429?"rate_limited": (st===400||st===404)?"bad_request":"upstream_error", message:m||("HTTP "+st)}; }
+function httpErr(st,m){ if(st===400&&/api.?key/i.test(m||"")) st=401; if(/high demand|overloaded|unavailable/i.test(m||"")&&st!==429) st=503; return {code: st===401||st===403?"bad_key": st===429?"rate_limited": (st===400||st===404)?"bad_request": st>=500?"busy":"upstream_error", message:m||("HTTP "+st)}; }
 function errText(e){
   const c=e&&e.code;
   if(c==="bad_key") return "API key 無效或沒有權限";
-  if(c==="rate_limited") return "超過額度或呼叫太頻繁，稍後再試";
+  if(c==="rate_limited") return "超過每分鐘或每天的免費次數，稍後再試";
+  if(c==="busy") return "AI 服務目前太多人使用（伺服器忙碌），已自動重試仍失敗，請稍後再試";
   if(c==="bad_request") return "請求有誤（模型名稱可能不對）："+(e.message||"");
   if(c==="refused") return "模型拒絕回答這一題";
   return (e&&e.message)||"連線失敗，請確認網路";
 }
+/* 伺服器忙碌（5xx）自動重試兩次；每分鐘次數用完（429）等 5 秒再試一次 */
 async function byokCall(prompt,cfg){
+  const waits=[1200,3000];
+  for(let i=0;;i++){
+    try{ return await byokCallOnce(prompt,cfg); }
+    catch(e){
+      const busy=e&&e.code==="busy", rl=e&&e.code==="rate_limited";
+      if(busy && i<waits.length){ await new Promise(r=>setTimeout(r,waits[i])); continue; }
+      if(rl && i===0){ await new Promise(r=>setTimeout(r,5000)); continue; }
+      throw e;
+    }
+  }
+}
+async function byokCallOnce(prompt,cfg){
   cfg=cfg||byok;
   if(cfg.provider==="gemini"){
     const model=cfg.model||PROVIDERS.gemini.model;
@@ -1048,7 +1062,7 @@ async function byokCall(prompt,cfg){
       if(sug && !cfg._retried && /no longer available|not found|deprecated/i.test(msg)){
         PROVIDERS.gemini.model=sug[1];
         if(cfg===byok && byok.model){ byok.model=""; try{ localStorage.setItem(BYOK_STORE,JSON.stringify(byok)); }catch(_){} }
-        return byokCall(prompt,{...cfg,model:sug[1],_retried:true});
+        return byokCallOnce(prompt,{...cfg,model:sug[1],_retried:true});
       }
       throw httpErr(r.status, msg);
     }
