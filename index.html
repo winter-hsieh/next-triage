@@ -1043,6 +1043,11 @@ async function byokCall(prompt,cfg){
       const busy=e&&e.code==="busy", rl=e&&e.code==="rate_limited";
       if(busy && i<waits.length){ await new Promise(r=>setTimeout(r,waits[i])); continue; }
       if(rl && i===0){ await new Promise(r=>setTimeout(r,5000)); continue; }
+      // 預設型號一直忙碌：改用比較不擠的 gemini-3.5-flash-lite 再試一次（玩家自己填了型號就不換）
+      const c0=cfg||byok;
+      if((busy||rl) && c0.provider==="gemini" && !c0.model && !c0._lite){
+        try{ return await byokCallOnce(prompt,{...c0,model:"gemini-3.5-flash-lite",_lite:true}); }catch(_){}
+      }
       throw e;
     }
   }
