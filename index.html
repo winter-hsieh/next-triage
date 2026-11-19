@@ -93,6 +93,13 @@ button{cursor:pointer}
 .quick{display:flex;flex-wrap:nowrap;overflow-x:auto;gap:6px;padding:8px 14px 2px;scrollbar-width:none;-webkit-mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent);mask-image:linear-gradient(90deg,#000 calc(100% - 48px),transparent)}
 .quick::-webkit-scrollbar{display:none}
 .quick{cursor:grab;user-select:none}
+.quick button.more{color:var(--accent);border-color:color-mix(in srgb,var(--accent) 60%,transparent);font-weight:700}
+.quick button.sug{color:var(--fg);border-color:var(--line2);background:color-mix(in srgb,var(--accent) 10%,transparent)}
+.qlist{max-width:620px}
+.qcat{display:flex;flex-direction:column;gap:6px}
+.qcat b{font-size:12px;letter-spacing:.1em;color:var(--muted)}
+.cheat .cheatrow{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;align-items:start;line-height:1.7}
+.cheat ul{margin:0;padding-left:20px;line-height:1.7}
 .quick.dragging{cursor:grabbing}
 .quick.dragging button{pointer-events:none}
 .quick.atend{-webkit-mask-image:none;mask-image:none}
@@ -282,7 +289,7 @@ details .tr{margin-top:8px;display:flex;flex-direction:column;gap:4px;font-size:
       <div class="colhead"><span>檢傷單</span><span class="mono" id="formWho">—</span></div>
       <form class="form scroll" id="triageForm">
         <div class="field"><span class="lbl"><button class="term" data-term="vitals" type="button">生命徵象</button>（按「量生命徵象」才會出現）</span><div class="vitals" id="vitals"></div></div>
-        <div class="field"><span class="lbl"><button class="term" data-term="ttas" type="button">TTAS 級數</button>　拿不準時<button class="term" data-term="under" type="button">寧可判重</button></span>
+        <div class="field"><span class="lbl"><button class="term" data-term="ttas" type="button">TTAS 級數</button>　拿不準時<button class="term" data-term="under" type="button">寧可判重</button>　<button class="term" id="cheatBtn" type="button" style="color:var(--accent);font-weight:700">判級小抄</button></span>
           <div class="levels" role="radiogroup" aria-label="TTAS 級數" id="levels"></div></div>
         <div class="dest" id="dest"></div>
         <button class="btn" id="submitBtn" type="submit" disabled>完成檢傷<span class="cost">1分</span></button>
@@ -822,6 +829,13 @@ function offlineReply(p,q0){
     else if(ONSET[p.c.id] && /突然|開始|多久|什麼時候|慢慢|幾點/.test(q0)) pLines.push(ONSET[p.c.id]);
     else if(/病史|吃藥|藥|慢性|過敏/.test(q0) && !p.c.clues.some(cl=>/病史|藥/.test(cl.when||""))){ const h=HIST[p.c.id]; if(h&&h.fam) fLines.push(h.text); else pLines.push(h?h.text:"沒有什麼病啦，也沒有在吃藥。"); }
     else if(/幾分|分數|0到10|1到10|多痛|痛不痛/.test(q0)) pLines.push(p.c.loud?"十分！很痛啦！":"……大概五、六分吧，還忍得住。");
+    else if(/有沒有|會不會|是不是|有嗎|會嗎/.test(q0) && ["吐","痛","燒","喘","暈","汗","麻","抖","血","咳","悶"].some(t=>q0.includes(t)&&(p.c.cc+p.c.short+p.c.clues.filter(x=>x.vol||p.revealed.has(x.id)).map(x=>x.fact).join("")+(p.c.family?p.c.family.lines.join(""):"")).includes(t)))
+      pLines.push(p.c.loud? "就剛剛講的那樣啊！" : "……就像剛剛說的那樣。");
+    else if(/有沒有|會不會|是不是|有嗎|會嗎/.test(q0)){
+      const no=p.c.loud? ["沒有啦！","這個沒有，就是很痛啦！","沒有沒有。"] : ["……好像沒有。","沒有耶。","這個倒是沒有。"];
+      const line=no[Math.floor(Math.random()*no.length)];
+      if(p.c.proxy && p.c.family && /家屬|由.{0,4}(女兒|媽媽|太太|店員|同學|員警)回答/.test(p.c.proxy)) fLines.push(line.replace("就是很痛啦！","")); else pLines.push(line);
+    }
     else { const f=p.c.filler; let i=Math.floor(Math.random()*f.length); if(f.length>1&&i===p.lastFill) i=(i+1)%f.length; p.lastFill=i; pLines.push(f[i]); }
   }
   // 家屬「應該被相信」主動插話
@@ -1392,6 +1406,7 @@ function render(){
   $("askBtn").disabled=!on;
   $("askBtn").firstChild.textContent=S.busy?"取消":"問";
   $("askBtn").querySelector(".cost").hidden=!!S.busy;
+  if(on) buildQuick(p);
   if(on){
     $("ptHead").replaceChildren(
       el("h2",{},`${p.c.name}`,el("small",{text:`${p.c.age} 歲・${p.c.sex}${p.c.job?"・"+p.c.job:""}・${p.c.mode}${p.c.family?"・陪同："+p.c.family.who:""}`}),el("small",{class:"mono",text:"到診 "+clockStr(arriveSec(p))})),
@@ -1413,7 +1428,44 @@ const QUICK=["還有哪裡不舒服嗎？","是突然開始，還是慢慢變嚴
   window.addEventListener("pointermove",e=>{ if(!down) return; const dx=e.clientX-down.x; if(Math.abs(dx)>5){ dragged=true; q.classList.add("dragging"); } if(dragged) q.scrollLeft=down.left-dx; });
   window.addEventListener("pointerup",()=>{ down=null; q.classList.remove("dragging"); });
   q.addEventListener("click",e=>{ if(dragged){ e.preventDefault(); e.stopPropagation(); dragged=false; } },true); })();
-function buildQuick(){ $("quick").replaceChildren(...QUICK.map(q=>el("button",{type:"button",onclick:()=>ask(q)},q))); }
+/* 分類好的問題清單（「更多問題…」） */
+const QCATS=[
+  ["症狀細節",["還有哪裡不舒服嗎？","是突然開始，還是慢慢變嚴重？","痛起來是什麼感覺？會跑到別的地方嗎？","0 到 10 分，現在痛幾分？","這樣多久了？有停過嗎？","走路或活動的時候會更嚴重嗎？"]],
+  ["全身狀況",["有沒有冒冷汗、頭暈或喘？","有沒有發燒、發抖？","有沒有吐或拉肚子？","手腳會麻或沒力嗎？","今天有吃東西、喝水、尿尿嗎？","平常的狀況跟今天比起來呢？"]],
+  ["過去病史與用藥",["有什麼疾病史？平常有在吃藥嗎？","有沒有對什麼藥物過敏？","以前有沒有發生過類似的狀況？","最近有沒有跌倒、撞到或受傷？"]],
+  ["看對象問",[{q:"最後一次月經是什麼時候？有沒有可能懷孕？",show:p=>p.c.sex==="女"&&p.c.age>=12&&p.c.age<=55},
+    {q:"（問家屬）他平常是什麼樣子？今天哪裡不一樣？",show:p=>!!p.c.family},
+    {q:"（問家屬）你覺得他今天哪裡最不對勁？",show:p=>!!p.c.family},
+    {q:"孩子精神怎麼樣？還會玩嗎？",show:p=>p.c.age<12},
+    {q:"有沒有喝酒？喝了多少？",show:p=>p.c.age>=18}]],
+  ["安撫",["別擔心，我們會依嚴重程度盡快安排看診。","我知道你很不舒服，我先幫你量一下數值。"]]
+];
+/* 這位病人還沒問出來的資訊：給 2–3 句建議問法（照病例順序，不洩漏哪個比較重要） */
+function suggestFor(p){
+  if(!p) return [];
+  return p.c.clues.filter(cl=>!cl.vol && !cl.volTurn && cl.ask && !p.revealed.has(cl.id)).slice(0,3).map(cl=>cl.ask);
+}
+function showMoreQuestions(){
+  const p=S.cur; if(!p||S.busy) return;
+  openPop(close=>el("div",{class:"popcard qlist"},el("h3",{text:"要問什麼？"}),
+    el("p",{class:"note",text:"點一句就會直接問出去（每句 30 秒）。看清單時時間暫停。"}),
+    ...QCATS.map(([name,qs])=>{
+      const items=qs.map(x=>typeof x==="string"?{q:x}:x).filter(x=>!x.show||x.show(p));
+      return items.length? el("div",{class:"qcat"},el("b",{text:name}),el("div",{class:"glist"},items.map(x=>el("button",{type:"button",onclick:()=>{close();ask(x.q);}},x.q)))) : null;
+    }),
+    el("div",{},el("button",{class:"btn ghost",type:"button",onclick:close},"關閉"))));
+}
+let quickKey="";
+function buildQuick(p){
+  const sug=suggestFor(p), base=QUICK.filter(q=>!sug.includes(q));
+  const key=(p?p.c.id:"")+"|"+sug.join("|");
+  if(key===quickKey) return; quickKey=key;
+  $("quick").replaceChildren(
+    el("button",{type:"button",class:"more",onclick:showMoreQuestions},"更多問題…"),
+    ...sug.map(q=>el("button",{type:"button",class:"sug",title:"根據這位病人建議的追問",onclick:()=>ask(q)},q)),
+    ...base.map(q=>el("button",{type:"button",onclick:()=>ask(q)},q)));
+  $("quick").scrollLeft=0;
+}
 
 function showTitle(){
   showOverlay(el("div",{class:"sheet",role:"dialog","aria-modal":"true","aria-label":"開始"},
@@ -1820,8 +1872,8 @@ function showTerm(key){
 const TUT=[
   {sel:".bar", title:"班次時鐘", text:"最左邊是遊戲裡的時間，一開始就會一直往前走。病人在候診區等越久，有些人會越來越嚴重。旁邊依序是剩下幾分鐘、空床數、已經檢傷幾位。"},
   {sel:"main.desk > section:nth-of-type(1)", title:"① 點病人，叫號", text:"病人到院後會排在這裡。點一張卡片，就是叫這位病人來問診。卡片左邊的顏色是他「看起來」的樣子：灰色還好，黃、橙、紅越來越不妙。右上角是他等了多久。"},
-  {sel:"main.desk > section:nth-of-type(2)", title:"② 問診", text:"叫號後，對話會出現在這裡。病人會先說哪裡不舒服，你可以點下面的快捷問句，或自己打字問。每問一句會花 30 秒。按「量生命徵象」（2 分鐘）可以看血壓、心跳等數值。"},
-  {sel:"main.desk > section:nth-of-type(3)", title:"③ 給級數、送出", text:"量過的數值會出現在上面，紅字代表異常。問得差不多了，選 1 到 5 級（1 最緊急、5 最不急），再按「完成檢傷」。系統不會當場告訴你對錯，結算時才會揭曉。"},
+  {sel:"main.desk > section:nth-of-type(2)", title:"② 問診", text:"叫號後，對話會出現在這裡。病人會先說哪裡不舒服。下面的問句可以直接點：最前面淡藍色的是針對這位病人的建議追問，「更多問題…」有分類好的完整清單，也可以自己打字問。每問一句會花 30 秒。按「量生命徵象」（2 分鐘）可以看血壓、心跳等數值。"},
+  {sel:"main.desk > section:nth-of-type(3)", title:"③ 給級數、送出", text:"量過的數值會出現在上面，紅字代表異常。問得差不多了，選 1 到 5 級（1 最緊急、5 最不急），再按「完成檢傷」。系統不會當場告訴你對錯，結算時才會揭曉。不知道該給幾級，可以點級數旁邊的「判級小抄」。"},
   {sel:"#levels", title:"拿不準時，判重一點", text:"判太重只會少一點分；判太輕會扣很多分，嚴重的話病人會在候診區倒下。不確定的時候，往緊急的那邊選。"},
   {sel:"#glossBtn", title:"看不懂就點這裡", text:"「名詞解釋」可以查血壓、TTAS 這些詞，畫面上有虛線的字也能點。想結束可以按「提早結算」。看說明時遊戲時間會暫停。"},
   {sel:null, title:"開始值班吧！", text:"第一位病人已經在候診佇列了，點他的卡片開始問診。結算時會告訴你每位病人的真實級數，還有你漏問了哪一句。"}
@@ -1866,10 +1918,28 @@ function runTutorial(after){
   card.addEventListener("keydown",e=>{ if(e.key==="Escape") finish(); });
   show();
 }
+/* 判級小抄：給沒學過醫的玩家 */
+function showCheat(){
+  const row=(n,name,txt)=>el("div",{class:"cheatrow"},el("span",{class:"chip c"+n,text:n}),el("div",{},el("b",{text:name+"　"}),txt));
+  openPop(close=>el("div",{class:"popcard cheat qlist"},el("h3",{text:"判級小抄"}),
+    el("p",{class:"note",text:"真正的檢傷有很詳細的標準，這是給遊戲用的白話版。"}),
+    el("b",{text:"判斷順序"}),
+    el("ul",{},el("li",{text:"先看數值：量生命徵象，紅字代表異常，就要往 1、2 級想。"}),
+      el("li",{text:"再看外觀：臉色蒼白、冒冷汗、叫不太醒、講話斷斷續續，都是危險訊號。"}),
+      el("li",{text:"最後才聽他怎麼說：病人說「沒事」不代表沒事，大聲喊痛也不一定嚴重。家屬說「跟平常不一樣」要特別注意。"})),
+    el("b",{text:"每一級大概的樣子"}),
+    row(1,"復甦急救","叫不醒、快不能呼吸、休克（血壓很低、心跳很快、全身濕冷），或突然撕裂般的劇痛。要立刻處理。"),
+    row(2,"危急","意識突然變差或混亂、喘到講不出完整句子、血氧低於 94%、胸悶又冒冷汗、突然一側沒力或講話不清楚、發燒又血壓低或心跳很快、頭撞到又在吃抗凝血的藥。"),
+    row(3,"緊急","數值大致穩定，但症狀明顯、需要較快處理；或剛發生過嚇人的狀況（例如抽筋）但現在已經恢復。"),
+    row(4,"次緊急","數值正常、精神還不錯、能自己走，症狀輕但需要看醫生。"),
+    row(5,"非緊急","很輕微、可以慢慢等，例如已經止血的小傷口、輕微感冒。"),
+    el("p",{class:"note",text:"拿不準時往緊急的那邊選：判太重只扣一點分，判太輕扣很多分。"}),
+    el("div",{},el("button",{class:"btn",type:"button",onclick:close},"知道了"))));
+}
 function showGlossary(){
   openPop(close=>el("div",{class:"popcard"},el("h3",{text:"名詞解釋"}),el("p",{class:"note",text:"點任何虛線底的字也能看說明。"}),
     el("div",{class:"glist"},Object.entries(GLOSS).map(([k,g])=>el("button",{type:"button",onclick:()=>{close();showTerm(k);}},g[0]))),
-    el("div",{},el("button",{class:"btn ghost",type:"button",onclick:()=>{close();runTutorial();}},"再看一次新手教學")),
+    el("div",{class:"btnrow"},el("button",{class:"btn ghost",type:"button",onclick:()=>{close();runTutorial();}},"再看一次新手教學"),el("button",{class:"btn ghost",type:"button",onclick:()=>{close();showCheat();}},"判級小抄")),
     el("div",{},el("button",{class:"btn ghost",onclick:close},"關閉"))));
 }
 document.addEventListener("click",e=>{ const t=e.target.closest&&e.target.closest(".term[data-term]"); if(t){ e.preventDefault(); e.stopPropagation(); showTerm(t.dataset.term);} },true);
@@ -1945,6 +2015,7 @@ $("vitalBtn").addEventListener("click",takeVitals);
 $("lookBtn").addEventListener("click",look);
 $("triageForm").addEventListener("submit",submitTriage);
 $("glossBtn").addEventListener("click",showGlossary);
+$("cheatBtn").addEventListener("click",showCheat);
 $("aiBtn").addEventListener("click",showAISettings);
 $("endBtn").addEventListener("click",()=>{
   if(!S||S.ended||!$("overlay").hidden||document.querySelector(".pop")) return;
@@ -1958,7 +2029,7 @@ $("animBtn").addEventListener("click",()=>{ ANIM=!ANIM; try{localStorage.setItem
 $("pauseBtn").addEventListener("click",()=>{ if(!S||S.ended||!$("overlay").hidden||document.querySelector(".pop")) return; S.running=!S.running; lastReal=performance.now(); renderLive(); });
 $("speedBtn").addEventListener("click",()=>{ if(!S) return; S.speed=S.speed===1?2:1; $("speedBtn").setAttribute("aria-pressed",String(S.speed===2)); });
 
-newGame(); buildQuick(); render(); showTitle(); startLoop(); S.running=false;
+newGame(); buildQuick(null); render(); showTitle(); startLoop(); S.running=false;
 (async()=>{
   const hasRuntime=!!(window.claude && window.claude.use);
   try{ sample = hasRuntime ? await window.claude.use("sample") : null; }catch(_){ sample=null; }
